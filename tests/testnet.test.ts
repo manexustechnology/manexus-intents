@@ -101,26 +101,57 @@ test("send constructs a testnet-only native transfer and validates hash", async 
     ),
   );
 });
-test("receipt confirmation requires matching hash and successful mined status", () => {
-  assert.equal(receiptState(null, hash), "pending");
+test("receipt confirmation requires the exact reviewed mined payment", () => {
+  const p = payment(from, to, "0.001"),
+    blockHash = "0x" + "b".repeat(64);
+  const receipt = {
+    transactionHash: hash,
+    blockHash,
+    blockNumber: "0x1",
+    status: "0x1",
+    from,
+    to,
+  };
+  const tx = {
+    hash,
+    blockHash,
+    blockNumber: "0x1",
+    from,
+    to,
+    value: p.value,
+    chainId: TEST_CHAIN,
+    input: "0x",
+  };
+  assert.equal(receiptState(null, hash, null, p), "pending");
+  assert.equal(receiptState(receipt, hash, tx, p), "confirmed");
   assert.equal(
-    receiptState(
-      { transactionHash: hash, blockNumber: "0x1", status: "0x1" },
-      hash,
-    ),
-    "confirmed",
-  );
-  assert.equal(
-    receiptState(
-      { transactionHash: hash, blockNumber: "0x1", status: "0x0" },
-      hash,
-    ),
+    receiptState({ ...receipt, status: "0x0" }, hash, tx, p),
     "reverted",
   );
-  assert.throws(() =>
-    receiptState(
-      { transactionHash: "0xwrong", blockNumber: "0x1", status: "0x1" },
-      hash,
-    ),
-  );
+  for (const mismatch of [
+    { from: to },
+    { to: from },
+    { value: "0x1" },
+    { chainId: "0x1" },
+    { chainId: undefined },
+    { hash: "0x" + "c".repeat(64) },
+    { blockHash: "0x" + "c".repeat(64) },
+    { blockNumber: "0x2" },
+    { input: "0x1234" },
+  ])
+    assert.throws(() => receiptState(receipt, hash, { ...tx, ...mismatch }, p));
+  for (const mismatch of [
+    { from: to },
+    { to: from },
+    { blockNumber: null },
+    { blockNumber: "0x01" },
+    { blockNumber: "0x-1" },
+    { blockNumber: "0x" },
+    { blockNumber: "garbage" },
+    { transactionHash: "wrong" },
+    { status: "0x2" },
+  ])
+    assert.throws(() => receiptState({ ...receipt, ...mismatch }, hash, tx, p));
+  assert.throws(() => receiptState(receipt, hash, null, p));
+  assert.ok(Object.isFrozen(p));
 });

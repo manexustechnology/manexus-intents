@@ -9,6 +9,7 @@ import {
   preflight,
   submitTestPayment,
   receiptState,
+  readTestnetRPC,
   validHash,
   type Payment,
   type Provider,
@@ -37,10 +38,7 @@ try {
       record = {
         payment: p,
         hash: r.hash,
-        state:
-          r.state === "confirmed" || r.state === "reverted"
-            ? r.state
-            : "uncertain",
+        state: "uncertain",
       };
   }
 } catch {
@@ -239,24 +237,36 @@ async function send(p: Payment, version: number, reviewedAt: number) {
 async function checkReceipt(r: RecordData) {
   if (busy || !r.hash) return;
   busy = true;
+  r.state = "unverified";
+  save();
+  const version = revision;
+  const activeProvider = provider;
   try {
-    if (!provider)
-      throw Error("Reconnect the test wallet to check its network receipt.");
-    await checkWallet(provider);
-    const receipt = await provider.request({
-      method: "eth_getTransactionReceipt",
-      params: [r.hash],
-    });
-    await checkWallet(provider);
-    r.state = receiptState(receipt, r.hash);
+    const chain = await readTestnetRPC("eth_chainId");
+    if (chain !== TEST_CHAIN)
+      throw Error(
+        "Confirmation RPC is not Base Sepolia. Payment not verified.",
+      );
+    const receipt = await readTestnetRPC("eth_getTransactionReceipt", r.hash);
+    const minedTransaction =
+      receipt === null
+        ? null
+        : await readTestnetRPC("eth_getTransactionByHash", r.hash);
+    if (version !== revision || provider !== activeProvider)
+      throw Error(
+        "Wallet changed during verification. Payment not verified; check again.",
+      );
+    r.state = receiptState(receipt, r.hash, minedTransaction, r.payment);
     save();
     notice =
       r.state === "pending"
         ? "Still pending. Check again later."
         : r.state === "confirmed"
-          ? "Receipt confirms the testnet transfer. This is not cross-chain settlement."
-          : "Transaction reverted. The test payment did not execute; testnet gas may have been spent.";
+          ? "Mined transaction matches the reviewed sender, recipient, amount and Base Sepolia network. This is not cross-chain settlement."
+          : "Matching transaction reverted. The test payment did not execute; testnet gas may have been spent.";
   } catch (e) {
+    r.state = "unverified";
+    save();
     notice = message(e);
   } finally {
     busy = false;

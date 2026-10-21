@@ -2,6 +2,37 @@ import { test, expect, type Page } from "@playwright/test";
 const from = "0x1111111111111111111111111111111111111111",
   to = "0x2222222222222222222222222222222222222222";
 async function wallet(page: Page, mode = "normal") {
+  await page.route("https://sepolia.base.org/", async (route) => {
+    const method = route.request().postDataJSON().method;
+    if (mode === 'verification-race' && method === 'eth_getTransactionByHash') await page.evaluate(() => { const w = window as unknown as {listeners:Record<string,(v:unknown)=>void>}; w.listeners.chainChanged('0x1'); });
+    const hash = "0x" + "a".repeat(64),
+      blockHash = "0x" + "b".repeat(64);
+    const receipt = {
+      transactionHash: hash,
+      blockHash,
+      blockNumber: mode === "malformed-block" ? "not-hex" : "0x123",
+      status: "0x1",
+      from,
+      to,
+    };
+    const tx = {
+      hash,
+      blockHash,
+      blockNumber: "0x123",
+      from: mode === "mismatch-from" ? to : from,
+      to: mode === "mismatch-to" ? from : to,
+      value: mode === "mismatch-value" ? "0x1" : "0x38d7ea4c68000",
+      chainId: mode === "mismatch-chain" ? "0x1" : "0x14a34",
+      input: "0x",
+    };
+    const result =
+      method === "eth_chainId"
+        ? "0x14a34"
+        : method === "eth_getTransactionReceipt"
+          ? receipt
+          : tx;
+    await route.fulfill({ json: { jsonrpc: "2.0", id: 1, result } });
+  });
   await page.addInitScript(
     ({ from, mode }) => {
       const w = window as unknown as {
@@ -46,7 +77,27 @@ async function wallet(page: Page, mode = "normal") {
               return {
                 transactionHash: "0x" + "a".repeat(64),
                 blockNumber: "0x123",
+                blockHash: "0x" + "b".repeat(64),
+                from,
+                to: "0x2222222222222222222222222222222222222222",
                 status: "0x1",
+              };
+            case "eth_getTransactionByHash":
+              return {
+                hash: "0x" + "a".repeat(64),
+                blockHash: "0x" + "b".repeat(64),
+                blockNumber: "0x123",
+                from:
+                  mode === "mismatch-from"
+                    ? "0x3333333333333333333333333333333333333333"
+                    : from,
+                to:
+                  mode === "mismatch-to"
+                    ? from
+                    : "0x2222222222222222222222222222222222222222",
+                value: mode === "mismatch-value" ? "0x1" : "0x38d7ea4c68000",
+                chainId: mode === "mismatch-chain" ? "0x1" : "0x14a34",
+                input: "0x",
               };
             default:
               throw Error("Unexpected method " + a.method);
@@ -74,7 +125,9 @@ const sendCount = (page: Page) =>
         (c) => c.method === "eth_sendTransaction",
       ).length,
   );
-test("testnet review, explicit confirmation, transaction and receipt", async ({ page }, info) => {
+test("testnet review, explicit confirmation, transaction and receipt", async ({
+  page,
+}, info) => {
   await wallet(page);
   await open(page);
   await review(page);
@@ -241,3 +294,42 @@ test("testnet request links prefill only, with no wallet side effects", async ({
     ),
   ).toBe(0);
 });
+
+for (const mismatch of ["from", "to", "value", "chain"])
+  test(`mined ${mismatch} mismatch never fulfills reviewed payment`, async ({
+    page,
+  }) => {
+    await wallet(page, "mismatch-" + mismatch);
+    await open(page);
+    await review(page);
+    await page.locator("#test-confirm").check();
+    await page.locator("#test-send").click();
+    await page.getByRole("button", { name: "Check confirmation" }).click();
+    await expect(page.locator("#test-status")).toContainText(
+      "does not match the reviewed payment",
+    );
+    await expect(page.locator("#test-tracking")).not.toContainText(
+      "Confirmed on Base Sepolia",
+    );
+    await expect(
+      page.getByRole("button", { name: "Review test payment" }),
+    ).toBeDisabled();
+    expect(await sendCount(page)).toBe(1);
+  });
+
+test("malformed mined block cannot confirm a payment", async ({ page }) => {
+  await wallet(page, "malformed-block");
+  await open(page);
+  await review(page);
+  await page.locator("#test-confirm").check();
+  await page.locator("#test-send").click();
+  await page.getByRole("button", { name: "Check confirmation" }).click();
+  await expect(page.locator("#test-status")).toContainText(
+    "Invalid wallet RPC response",
+  );
+  await expect(page.locator("#test-tracking")).not.toContainText(
+    "Confirmed on Base Sepolia",
+  );
+});
+
+test('wallet change while receipt lookup is pending invalidates confirmation',async({page})=>{await wallet(page,'verification-race');await open(page);await review(page);await page.locator('#test-confirm').check();await page.locator('#test-send').click();await page.getByRole('button',{name:'Check confirmation'}).click();await expect(page.locator('#test-status')).toContainText('Wallet changed during verification');await expect(page.locator('#test-tracking')).not.toContainText('Confirmed on Base Sepolia');});
