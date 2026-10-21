@@ -74,9 +74,7 @@ const sendCount = (page: Page) =>
         (c) => c.method === "eth_sendTransaction",
       ).length,
   );
-test("testnet review, explicit confirmation, transaction and receipt", async ({
-  page,
-}) => {
+test("testnet review, explicit confirmation, transaction and receipt", async ({ page }, info) => {
   await wallet(page);
   await open(page);
   await review(page);
