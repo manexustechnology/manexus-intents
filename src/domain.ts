@@ -52,7 +52,8 @@ export function validAmount(value: string, decimals = 8): boolean {
   );
 }
 export function validAddress(address: string, chain: string): boolean {
-  if (chain === "eth") return /^0x[a-fA-F0-9]{40}$/.test(address);
+  if (chain === "eth" || chain === "base-sepolia")
+    return /^0x[a-fA-F0-9]{40}$/.test(address);
   if (chain === "near")
     return /^(?=.{2,64}$)[a-z0-9]+(?:[._-][a-z0-9]+)*$/.test(address);
   if (chain === "sol") return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(address);
@@ -69,7 +70,8 @@ export function validateRequest(data: RequestData): boolean {
     ["USDC", "NEAR", "ETH", "SOL"].includes(data.symbol) &&
     ((data.chain === "eth" && ["USDC", "ETH"].includes(data.symbol)) ||
       (data.chain === "near" && data.symbol === "NEAR") ||
-      (data.chain === "sol" && data.symbol === "SOL")) &&
+      (data.chain === "sol" && data.symbol === "SOL") ||
+      (data.chain === "base-sepolia" && data.symbol === "ETH")) &&
     validAddress(data.address, data.chain) &&
     validAmount(data.amount, data.symbol === "USDC" ? 6 : 8)
   );

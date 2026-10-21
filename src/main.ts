@@ -1,3 +1,4 @@
+import { mountTestnet, mountSimulation } from "./testnet-ui.ts";
 import { dryQuoteBody, safeQuote, formatUnits } from "./live.ts";
 import "./style.css";
 import {
@@ -24,6 +25,7 @@ const names: Record<string, string> = {
   sol: "Solana",
   arb: "Arbitrum",
   base: "Base",
+  "base-sepolia": "Base Sepolia testnet",
 };
 const chain = (s: string) => names[s] ?? s;
 const money = (n: number) =>
@@ -48,7 +50,7 @@ function shell() {
     )
     .join(
       "",
-    )}</nav><div class="sidebottom"><div class="network"><i></i> Built around NEAR Intents</div><button class="textbutton" data-tab="privacy">◎ Privacy & transparency</button><p>Manexus preview · v0.1</p></div></aside><div class="page"><header><span class="crumb">Workspace <span>/</span> ${tab === "overview" ? "Overview" : tab === "explore" ? "Explore assets" : tab === "privacy" ? "Privacy" : tab[0].toUpperCase() + tab.slice(1)}</span><div class="header-right"><span class="badge">Preview release</span><span class="avatar">M</span></div></header><main id="content"></main><footer><span>Built for a world without boundaries. <button class="textbutton" data-tab="privacy">Privacy & transparency</button></span><span>No wallet connected · No transactions enabled</span></footer></div><div id="toast" role="status"></div>`;
+    )}</nav><div class="sidebottom"><div class="network"><i></i> Built around NEAR Intents</div><button class="textbutton" data-tab="privacy">◎ Privacy & transparency</button><p>Manexus preview · v0.1</p></div></aside><div class="page"><header><span class="crumb">Workspace <span>/</span> ${tab === "overview" ? "Overview" : tab === "explore" ? "Explore assets" : tab === "privacy" ? "Privacy" : tab[0].toUpperCase() + tab.slice(1)}</span><div class="header-right"><span class="badge">Preview release</span><span class="avatar">M</span></div></header><main id="content"></main><footer><span>Built for a world without boundaries. <button class="textbutton" data-tab="privacy">Privacy & transparency</button></span><span>Base Sepolia payments only · Mainnet execution disabled</span></footer></div><div id="toast" role="status"></div>`;
   app.querySelectorAll<HTMLButtonElement>("[data-tab]").forEach(
     (b) =>
       (b.onclick = () => {
@@ -61,7 +63,11 @@ function shell() {
     shell();
   });
   render();
-  if (tab === "swap") livePanel();
+  if (tab === "swap") {
+    livePanel();
+    mountSimulation(document.querySelector("#content")!);
+  }
+  if (tab === "payments") mountTestnet(document.querySelector("#content")!);
 }
 function heading(eyebrow: string, title: string, sub: string) {
   return `<div class="heading"><div><p class="eyebrow">${eyebrow}</p><h1>${title}</h1><p class="muted">${sub}</p></div><span class="livebadge"><i></i>${live ? "Live token discovery" : "Sample token data"}</span></div>`;
@@ -189,7 +195,7 @@ function render() {
         "A new route for your assets.",
         "Explore a cross-chain estimate before taking your next step.",
       ) +
-      `<div class="two-column"><section class="panel swap-panel"><div class="section-title"><h2>Swap preview</h2><span class="badge">Illustrative estimate</span></div><form id="swap-form"><label class="fieldbox">You pay<div class="amountrow"><input id="amount" value="100" inputmode="decimal" aria-label="Amount to swap"><select id="from" aria-label="Pay asset">${options()}</select></div></label><button type="button" id="reverse" class="reverse" aria-label="Reverse assets">⇅</button><label class="fieldbox">You receive<select id="to" aria-label="Receive asset">${options()}</select><span class="large" id="output">—</span></label><fieldset><legend>Slippage tolerance</legend>${[0.1, 0.5, 1].map((n) => `<label class="radio"><input type="radio" name="slippage" value="${n}" ${n === 0.5 ? "checked" : ""}>${n}%</label>`).join("")}</fieldset><p class="error" id="swap-error" role="alert"></p><button class="primary full" type="submit">Preview estimate <span>↗</span></button></form><div id="quote" aria-live="polite"></div><button class="disabled full" disabled>Execution unavailable in preview</button></section><div class="explain"><span class="big-icon">⇄</span><h2>Many chains.<br>One clear intention.</h2><p>NEAR Intents lets you describe the outcome you want. Solvers compete to find a route across networks.</p><div class="note"><strong>Know what you’re seeing</strong><p>This estimate uses reference prices only. It excludes network and solver fees and is not a live route or guaranteed rate. Slippage sets an illustrative minimum, not protection for an actual trade.</p></div><p class="fine">No wallet signing, deposits, or swaps are available in this release.</p></div></div>`;
+      `<div class="two-column"><section class="panel swap-panel"><div class="section-title"><h2>Swap preview</h2><span class="badge">Illustrative estimate</span></div><form id="swap-form"><label class="fieldbox">You pay<div class="amountrow"><input id="amount" value="100" inputmode="decimal" aria-label="Amount to swap"><select id="from" aria-label="Pay asset">${options()}</select></div></label><button type="button" id="reverse" class="reverse" aria-label="Reverse assets">⇅</button><label class="fieldbox">You receive<select id="to" aria-label="Receive asset">${options()}</select><span class="large" id="output">—</span></label><fieldset><legend>Slippage tolerance</legend>${[0.1, 0.5, 1].map((n) => `<label class="radio"><input type="radio" name="slippage" value="${n}" ${n === 0.5 ? "checked" : ""}>${n}%</label>`).join("")}</fieldset><p class="error" id="swap-error" role="alert"></p><button class="primary full" type="submit">Preview estimate <span>↗</span></button></form><div id="quote" aria-live="polite"></div><button class="disabled full" disabled>Execution unavailable in preview</button></section><div class="explain"><span class="big-icon">⇄</span><h2>Many chains.<br>One clear intention.</h2><p>NEAR Intents lets you describe the outcome you want. Solvers compete to find a route across networks.</p><div class="note"><strong>Know what you’re seeing</strong><p>This estimate uses reference prices only. It excludes network and solver fees and is not a live route or guaranteed rate. Slippage sets an illustrative minimum, not protection for an actual trade.</p></div><p class="fine">Mainnet signing, deposits, and swaps remain disabled. Try test ETH payments on the Payments tab.</p></div></div>`;
     (document.querySelector("#to") as HTMLSelectElement).selectedIndex = 1;
     document.querySelector("#reverse")!.addEventListener("click", () => {
       const a = document.querySelector<HTMLSelectElement>("#from")!,
@@ -244,7 +250,7 @@ function render() {
         "A request, ready to share.",
         "Create a clear payment request. No wallet connection needed.",
       ) +
-      `<div class="two-column"><section class="panel"><h2>Request a payment</h2><p class="muted">Only enter a public receiving address.</p><form id="payment-form"><label>Asset and network<select id="pay-token"><option value="USDC:eth">USDC · Ethereum</option><option value="ETH:eth">ETH · Ethereum</option><option value="NEAR:near">NEAR · NEAR</option><option value="SOL:sol">SOL · Solana</option></select></label><label>Amount<input id="pay-amount" inputmode="decimal" placeholder="0.00" required></label><label>Public receiving address<input id="address" placeholder="0x…" autocomplete="off" spellcheck="false" required maxlength="64"></label><p class="fine">The address, amount, asset and network will be visible to anyone with your link. Verify the address and network independently.</p><p class="error" role="alert" id="pay-error"></p><button type="submit" class="primary full">Create request <span>↗</span></button></form></section><section class="request-preview panel" id="request-preview"><span class="big-icon">↗</span><h2>Clear details.<br>Less back and forth.</h2><p class="muted">Your shareable request will appear here.</p><span class="badge">No funds move when you create a request</span></section></div>`;
+      `<div class="two-column"><section class="panel"><h2>Request a payment</h2><p class="muted">Only enter a public receiving address.</p><form id="payment-form"><label>Asset and network<select id="pay-token"><option value="ETH:base-sepolia">Test ETH · Base Sepolia</option><option value="USDC:eth">USDC · Ethereum (request only)</option><option value="ETH:eth">ETH · Ethereum</option><option value="NEAR:near">NEAR · NEAR</option><option value="SOL:sol">SOL · Solana</option></select></label><label>Amount<input id="pay-amount" inputmode="decimal" placeholder="0.00" required></label><label>Public receiving address<input id="address" placeholder="0x…" autocomplete="off" spellcheck="false" required maxlength="64"></label><p class="fine">The address, amount, asset and network will be visible to anyone with your link. Verify the address and network independently.</p><p class="error" role="alert" id="pay-error"></p><button type="submit" class="primary full">Create request <span>↗</span></button></form></section><section class="request-preview panel" id="request-preview"><span class="big-icon">↗</span><h2>Clear details.<br>Less back and forth.</h2><p class="muted">Your shareable request will appear here.</p><span class="badge">No funds move when you create a request</span></section></div>`;
     document.querySelector("#payment-form")!.addEventListener("submit", (e) => {
       e.preventDefault();
       const [symbol, ch] = value("pay-token").split(":");
@@ -311,11 +317,10 @@ function render() {
         "Your privacy deserves clarity.",
         "Understand what this preview does, and what it does not do.",
       ) +
-      `<section class="panel prose"><h2>Hiding a balance is a screen preference</h2><p>The hide-prices control only conceals values on your screen. It does not make transactions private or conceal blockchain activity.</p><h2>No private payments are implemented</h2><p>This release builds public-address payment requests. It does not implement shielded transfers, zero-knowledge proofs, or another on-chain privacy mechanism.</p><h2>Your request stays in your link</h2><p>Requests use a URL fragment containing only the public address, amount, asset and network you enter. This app has no request database, analytics, or signing backend. Anyone with the link can read its contents; your browser and sharing app may retain it.</p><h2>Public data, clear boundaries</h2><p>Token discovery calls NEAR 1Click directly from your browser, exposing your IP address to that service. If unavailable, the app labels sample data. Reference prices are not trade quotes. No wallet connection, asset custody, transaction broadcast or trading is implemented.</p><a href="https://docs.near-intents.org/" target="_blank" rel="noreferrer">Read about NEAR Intents ↗</a></section>`;
+      `<section class="panel prose"><h2>Hiding a balance is a screen preference</h2><p>The hide-prices control only conceals values on your screen. It does not make transactions private or conceal blockchain activity.</p><h2>No private payments are implemented</h2><p>This release builds public-address payment requests. It does not implement shielded transfers, zero-knowledge proofs, or another on-chain privacy mechanism.</p><h2>Your request stays in your link</h2><p>Requests use a URL fragment containing only the public address, amount, asset and network you enter. This app has no request database, analytics, or signing backend. Anyone with the link can read its contents; your browser and sharing app may retain it.</p><h2>Public data, clear boundaries</h2><p>Token discovery calls NEAR 1Click directly from your browser, exposing your IP address to that service. If unavailable, the app labels sample data. Reference prices are not trade quotes. An optional injected wallet can send native test ETH on Base Sepolia after your approval. Public testnet transactions are visible on-chain. The latest test payment details are stored locally for recovery. Mainnet signing, deposits and trading remain disabled; NEAR Intents quotes are read-only.</p><a href="https://docs.near-intents.org/" target="_blank" rel="noreferrer">Read about NEAR Intents ↗</a></section>`;
 }
 function options() {
   return tokens
-    .slice(0, 150)
     .map(
       (t) =>
         `<option value="${esc(t.assetId)}">${esc(t.symbol)} · ${esc(chain(t.blockchain))}</option>`,

@@ -1073,3 +1073,51 @@ dd {
     display: block;
   }
 }
+.testnet-panel {
+  max-width: 950px;
+  margin: 0 auto 28px;
+  border-color: #b7d59c;
+}
+.testnet-panel h3 {
+  font-size: 15px;
+}
+.wallet-actions {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  flex-wrap: wrap;
+  margin: 20px 0;
+}
+.wallet-actions a {
+  font-size: 11px;
+}
+.address-line {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.testnet-panel dd {
+  max-width: 65%;
+}
+.confirm-label {
+  display: flex;
+  align-items: start;
+  gap: 10px;
+  font-size: 12px;
+  line-height: 1.6;
+  margin: 20px 0;
+}
+.confirm-label input {
+  margin: 3px 0 0;
+}
+.testnet-panel button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+#simulation-status {
+  padding-left: 23px;
+  font-size: 12px;
+  line-height: 1.7;
+}
+#simulation-status li {
+  margin: 13px 0;
+}

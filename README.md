@@ -26,11 +26,11 @@ npm run build
 
 ## Boundaries
 
-No wallet connection/signing, custody, deposits, transaction broadcast, execution endpoint, balance retrieval, payment verification, or private payments. Hiding prices is not on-chain privacy. NEAR Intents has no testnet; live calls are mainnet dry previews only. Provider reference prices and snapshots may change. The provider sees browser IP and quote inputs. Synthetic quote addresses cannot be used as payment destinations.
+The original preview baseline has no mainnet wallet signing, custody, deposits, transaction broadcast, swap execution, mainnet balance retrieval, payment verification, or private payments. The later Base Sepolia test-payment flow is documented below. Hiding prices is not on-chain privacy. NEAR Intents has no testnet; live calls are mainnet dry previews only. Provider reference prices and snapshots may change. The provider sees browser IP and quote inputs. Synthetic quote addresses cannot be used as payment destinations.
 
 XAUT is an issuer-backed token, not a claim that this app offers redemption or verifies eligibility. See [issuer](https://gold.tether.to/) and [terms](https://gold.tether.to/legal/). Production asset support requires issuer, custody, legal and jurisdiction review.
 
-No analytics, private client material, credentials, paid backend or third-party font/image requests are included.
+No analytics, private client material, credentials, paid backend or third-party font/image requests are included. The optional wallet handles testnet RPC requests and signing.
 
 ## Demo
 
@@ -55,3 +55,28 @@ npx wrangler pages deploy dist --project-name manexus-intents --branch main
 - https://1click.chaindefuser.com/v0/tokens
 
 This baseline is independently developed; no claim of hackathon eligibility or submission is made.
+
+## Testnet payment iteration
+
+The Payments tab now has an **optional, user-controlled Base Sepolia test ETH flow**. Open in an injected EVM wallet browser, select Base Sepolia (chain ID 84532), connect, enter a plain receiving address and up to 0.1 test ETH, review, check the confirmation box, and explicitly approve in the wallet. No private keys are requested or stored. There is no mainnet transfer path, ERC-20 approval, swap execution, or WalletConnect service.
+
+The sender needs faucet test ETH and test gas. See [Base network details](https://docs.base.org/get-started/connect-to-base) and [free test funds](https://docs.base.org/get-started/get-funds). The app never claims a submitted transaction is confirmed: receipt checking requires the testnet transaction hash and successful mined status. An uncertain wallet outcome is retained locally and blocks another payment until the user checks their wallet and explicitly clears tracking. Local tracking does not cancel an on-chain transaction. Account/network changes invalidate the review. Only plain receiving addresses are supported in this iteration.
+
+Payment requests can include **Test ETH / Base Sepolia**. Opening such a link pre-fills the optional test payment form; it never connects, signs, or sends automatically. Mainnet request links remain request-only.
+
+The Swap tab also has a **local cross-chain simulation**. Every step is labelled simulated; it has no wallet/API/blockchain side effects. NEAR Intents has no testnet. Existing public mainnet dry quotes remain read-only. No confidential payments are implemented.
+
+Browser validation uses a mocked injected wallet; the agent did not connect to an owner's wallet, request faucet funds, sign, or broadcast a real/testnet transaction. A user-approved on-chain test remains the final integration check.
+
+### Test commands
+
+```sh
+npm test
+npm run build
+# Run against a local server or a deployed preview:
+PLAYWRIGHT_BASE_URL=https://manexus-intents.pages.dev npx playwright test
+# Optional public mainnet dry-quote smoke checks only:
+LIVE_API=1 PLAYWRIGHT_BASE_URL=https://manexus-intents.pages.dev npx playwright test live.spec.ts
+```
+
+Deployment is a manual upload with existing Wrangler OAuth access to the Manexus Cloudflare account. The GitHub repository is separate; **automatic GitHub-to-Pages deployment is not configured**.
