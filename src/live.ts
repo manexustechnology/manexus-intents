@@ -1,5 +1,62 @@
-import {validAmount,type Token} from './domain.ts';
-export function baseUnits(amount:string,decimals:number):string {if(!validAmount(amount,decimals))throw Error('Enter a valid positive amount.');const [whole,fraction='']=amount.split('.');return (BigInt(whole)*10n**BigInt(decimals)+BigInt(fraction.padEnd(decimals,'0')||'0')).toString();}
-export function dryQuoteBody(amount:string,origin:Token,destination:Token){return {dry:true,swapType:'EXACT_INPUT',slippageTolerance:100,originAsset:origin.assetId,depositType:'ORIGIN_CHAIN',destinationAsset:destination.assetId,amount:baseUnits(amount,origin.decimals),refundTo:'0x0000000000000000000000000000000000000001',refundType:'ORIGIN_CHAIN',recipient:destination.blockchain==='near'?'preview.near':'0x0000000000000000000000000000000000000001',recipientType:'DESTINATION_CHAIN',deadline:new Date(Date.now()+10*60*1000).toISOString()};}
-export function safeQuote(data:unknown):{amountOutFormatted:string;minAmountOut:string;timeEstimate?:number}{if(!data||typeof data!=='object')throw Error('Invalid quote response');const serialized=JSON.stringify(data);if(/"depositAddress"\s*:\s*"[^"\s]+"/.test(serialized))throw Error('Unexpected deposit details rejected.');const q=(data as {quote?:Record<string,unknown>}).quote;if(!q||typeof q.amountOutFormatted!=='string'||!/^\d+(\.\d+)?$/.test(q.amountOutFormatted)||typeof q.minAmountOut!=='string'||!/^\d+$/.test(q.minAmountOut))throw Error('Incomplete quote response.');return {amountOutFormatted:q.amountOutFormatted,minAmountOut:q.minAmountOut,timeEstimate:typeof q.timeEstimate==='number'?q.timeEstimate:undefined};}
-export function formatUnits(raw:string,decimals:number):string{const s=raw.padStart(decimals+1,'0');return decimals?s.slice(0,-decimals)+'.'+s.slice(-decimals):s;}
+import { validAmount, type Token } from "./domain.ts";
+export function baseUnits(amount: string, decimals: number): string {
+  if (!validAmount(amount, decimals))
+    throw Error("Enter a valid positive amount.");
+  const [whole, fraction = ""] = amount.split(".");
+  return (
+    BigInt(whole) * 10n ** BigInt(decimals) +
+    BigInt(fraction.padEnd(decimals, "0") || "0")
+  ).toString();
+}
+export function dryQuoteBody(
+  amount: string,
+  origin: Token,
+  destination: Token,
+) {
+  return {
+    dry: true,
+    swapType: "EXACT_INPUT",
+    slippageTolerance: 100,
+    originAsset: origin.assetId,
+    depositType: "ORIGIN_CHAIN",
+    destinationAsset: destination.assetId,
+    amount: baseUnits(amount, origin.decimals),
+    refundTo: "0x0000000000000000000000000000000000000001",
+    refundType: "ORIGIN_CHAIN",
+    recipient:
+      destination.blockchain === "near"
+        ? "preview.near"
+        : "0x0000000000000000000000000000000000000001",
+    recipientType: "DESTINATION_CHAIN",
+    deadline: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
+  };
+}
+export function safeQuote(data: unknown): {
+  amountOutFormatted: string;
+  minAmountOut: string;
+  timeEstimate?: number;
+} {
+  if (!data || typeof data !== "object") throw Error("Invalid quote response");
+  const serialized = JSON.stringify(data);
+  if (/"depositAddress"\s*:\s*"[^"\s]+"/.test(serialized))
+    throw Error("Unexpected deposit details rejected.");
+  const q = (data as { quote?: Record<string, unknown> }).quote;
+  if (
+    !q ||
+    typeof q.amountOutFormatted !== "string" ||
+    !/^\d+(\.\d+)?$/.test(q.amountOutFormatted) ||
+    typeof q.minAmountOut !== "string" ||
+    !/^\d+$/.test(q.minAmountOut)
+  )
+    throw Error("Incomplete quote response.");
+  return {
+    amountOutFormatted: q.amountOutFormatted,
+    minAmountOut: q.minAmountOut,
+    timeEstimate:
+      typeof q.timeEstimate === "number" ? q.timeEstimate : undefined,
+  };
+}
+export function formatUnits(raw: string, decimals: number): string {
+  const s = raw.padStart(decimals + 1, "0");
+  return decimals ? s.slice(0, -decimals) + "." + s.slice(-decimals) : s;
+}

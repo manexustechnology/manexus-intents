@@ -19,7 +19,7 @@ npm run build
 - Live public NEAR 1Click token discovery with clearly labelled sample fallback.
 - Searchable assets and reference prices; hide-prices screen preference.
 - Illustrative swap calculator with amount/pair/slippage validation, invalidation on edit and 60-second expiry. Explicitly excludes fees and is not an executable quote.
-- Separate live public mainnet dry-quote preview: Arbitrum USDC to NEAR or Ethereum XAUT, dynamically resolved from provider token discovery. Uses integer base-unit conversion and synthetic recipient addresses, literal `dry: true`, no authentication, no proxy and no confidential mode. Rejects responses with a nonempty deposit address. Errors never fall back to invented quotes. Snapshots expire after 60 seconds.
+- Separate live public mainnet dry-quote preview: Arbitrum USDC to wrapped NEAR (wNEAR) or Ethereum XAUT, dynamically resolved from provider token discovery. Uses integer base-unit conversion and synthetic recipient addresses, literal `dry: true`, no authentication, no proxy and no confidential mode. Rejects responses with a nonempty deposit address. Errors never fall back to invented quotes. Snapshots expire after 60 seconds.
 - Payment request builder with network-aware address syntax and amount validation. URL fragments contain only public address, amount, asset, network; no request database. Shareable previews do not verify address ownership or payment status.
 - Educational tokenized-asset concept gallery, explicitly synthetic and not inventory or investment offers.
 - Responsive layout, keyboard focus states, labelled fields, privacy explanation, security headers.
@@ -35,7 +35,7 @@ No analytics, private client material, credentials, paid backend or third-party 
 ## Demo
 
 1. Open Overview; live discovery label appears when available. Search an asset/network.
-2. Swap: inspect the illustrative calculator and disabled execution. Scroll to Mainnet quote preview; request 10 Arbitrum USDC to NEAR or XAUT. No funds move.
+2. Swap: inspect the illustrative calculator and disabled execution. Scroll to Mainnet quote preview; request 10 Arbitrum USDC to wNEAR or XAUT. No funds move.
 3. Payments: choose NEAR, amount 1.25, public test example `preview.near`. Create and copy a request; open it to see an unverified request preview. Do not send funds to this example.
 4. Explore assets and Privacy explain what remains conceptual/deferred.
 
