@@ -80,3 +80,7 @@ LIVE_API=1 PLAYWRIGHT_BASE_URL=https://manexus-intents.pages.dev npx playwright 
 ```
 
 Deployment is a manual upload with existing Wrangler OAuth access to the Manexus Cloudflare account. The GitHub repository is separate; **automatic GitHub-to-Pages deployment is not configured**.
+
+## Local invoicing prototype
+
+The invoice extension adds synthetic invoice drafts, exact line-item token totals, due dates, issued/cancelled lifecycle, local recovery, and unsigned shareable request views. Every invoice remains payment-unverified; public mainnet quote previews and testnet payments do not mark invoices paid. See [invoicing scope, retest steps and publication handoff](docs/INVOICING.md).

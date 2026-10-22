@@ -1,3 +1,4 @@
+import { mountInvoices } from "./invoice-ui.ts";
 import { mountTestnet, mountSimulation } from "./testnet-ui.ts";
 import { dryQuoteBody, safeQuote, formatUnits } from "./live.ts";
 import "./style.css";
@@ -36,12 +37,19 @@ const money = (n: number) =>
   }).format(n);
 const icon = (s: string) =>
   `<span class="coin ${esc(s.toLowerCase())}">${esc(s === "BTC" ? "₿" : s === "ETH" ? "Ξ" : s === "USDC" ? "$" : s === "SOL" ? "≋" : s.slice(0, 1))}</span>`;
+let unmountInvoices = () => true;
 function shell() {
+  if (!unmountInvoices()) {
+    tab = "invoices";
+    return;
+  }
+  unmountInvoices = () => true;
   clearInterval(quoteTimer);
   app.innerHTML = `<aside><a class="brand" href="#" aria-label="Manexus home"><span class="brandmark">m</span>manexus<span class="dot">.</span></a><span class="workspace">YOUR FINANCIAL WORLD</span><nav aria-label="Main navigation">${[
     ["overview", "◫", "Overview"],
     ["swap", "⇄", "Swap"],
     ["payments", "↗", "Payments"],
+    ["invoices", "▤", "Invoices"],
     ["explore", "◇", "Explore assets"],
   ]
     .map(
@@ -62,6 +70,10 @@ function shell() {
     tab = "overview";
     shell();
   });
+  if (tab === "invoices") {
+    unmountInvoices = mountInvoices(document.querySelector("#content")!, go);
+    return;
+  }
   render();
   if (tab === "swap") {
     livePanel();
@@ -357,22 +369,39 @@ function showRequest(d: RequestData, created: boolean) {
     }
   });
 }
-if (location.hash) {
-  tab = "payments";
-}
-shell();
-window.addEventListener("hashchange", () => {
+function openHash() {
+  if (location.hash.startsWith("#invoice=")) {
+    tab = "invoices";
+    shell();
+    return;
+  }
   if (location.hash) {
     tab = "payments";
     shell();
     if (!parseRequest(location.hash))
-      document.querySelector("#pay-error")!.textContent =
-        "This request link is invalid or unsupported.";
+      document
+        .querySelector("#pay-error")
+        ?.replaceChildren(
+          document.createTextNode(
+            "This request link is invalid or unsupported.",
+          ),
+        );
   }
-});
-if (location.hash && !parseRequest(location.hash))
-  document.querySelector("#pay-error")!.textContent =
-    "This request link is invalid or unsupported.";
+}
+if (location.hash.startsWith("#invoice=")) tab = "invoices";
+else if (location.hash) tab = "payments";
+shell();
+window.addEventListener("hashchange", openHash);
+if (
+  location.hash &&
+  !location.hash.startsWith("#invoice=") &&
+  !parseRequest(location.hash)
+)
+  document
+    .querySelector("#pay-error")
+    ?.replaceChildren(
+      document.createTextNode("This request link is invalid or unsupported."),
+    );
 async function loadTokens() {
   try {
     const response = await fetch("https://1click.chaindefuser.com/v0/tokens", {
