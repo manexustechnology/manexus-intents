@@ -13,7 +13,8 @@ import type { Db } from "./db.ts";
 import { HttpError } from "./http.ts";
 import { listIssuedInvoices } from "./invoices.ts";
 import type { NearRpc } from "./near-rpc.ts";
-import type { OneClickToken } from "./oneclick.ts";
+import type { OneClickToken, SwapStatus } from "./oneclick.ts";
+import { peekRow, refreshRow, unsignedForGoodRow, type TransferDeps, type TransferRow } from "./transfers.ts";
 import type { InvoiceRow } from "../shared/invoice.ts";
 
 type User = { account: string; kind: "near" | "evm" };
@@ -98,15 +99,16 @@ export function evaluate(input: EvalInput): ProposalDraft[] {
   return [...sweepFirst, ...bill.sort(byDue), ...follow.sort(byDue)].slice(0, MAX_DRAFTS);
 }
 
+export type ProposalRaw = Raw;
 type Raw = { id: string; type: ProposalType; dedup_key: string; params: string; status: ProposalStatus; deposit_address: string | null; created_at: string; updated_at: string; expires_at: string };
-const COLS = "id, type, dedup_key, params, status, deposit_address, created_at, updated_at, expires_at";
-function view(r: Raw): Proposal {
+export const COLS = "id, type, dedup_key, params, status, deposit_address, created_at, updated_at, expires_at";
+export function view(r: Raw): Proposal {
   return {
     id: r.id, type: r.type, dedupKey: r.dedup_key, params: JSON.parse(r.params) as Record<string, string>, status: r.status,
     ...(r.deposit_address ? { depositAddress: r.deposit_address } : {}), createdAt: r.created_at, updatedAt: r.updated_at, expiresAt: r.expires_at,
   };
 }
-const sameParams = (a: Record<string, string>, b: Record<string, string>) => {
+export const sameParams = (a: Record<string, string>, b: Record<string, string>) => {
   const ka = Object.keys(a), kb = Object.keys(b);
   return ka.length === kb.length && ka.every((k) => Object.hasOwn(b, k) && a[k] === b[k]);
 };
@@ -124,31 +126,109 @@ export async function listProposals(db: Db, user: User): Promise<Proposal[]> {
   return (await openProposals(db, user.account)).map(view);
 }
 
-export type AgentDeps = { db: Db; rpc: NearRpc; oneclick: { tokens(): Promise<OneClickToken[]> }; now: Date };
+export type AgentDeps = {
+  db: Db; rpc: NearRpc;
+  /** With `status`, executing proposals' transfers are also refreshed from 1Click (a few per run). */
+  oneclick: { tokens(): Promise<OneClickToken[]>; status?(depositAddress: string): Promise<SwapStatus> };
+  now: Date;
+};
+
+/**
+ * The inputs `evaluate` reads, loaded with bounded queries. `balances: false` skips the balance read (bills and
+ * invoices drafts do not depend on it), `reminders: false` skips bills and invoices (convert/sweep do not).
+ */
+export async function loadEvalInput(
+  deps: AgentDeps, user: User, policy: Policy, need: { balances: boolean; reminders: boolean } = { balances: true, reminders: true },
+): Promise<EvalInput> {
+  const { db, now } = deps;
+  const owner = user.account;
+  const balances = need.balances ? await getBalances({ db, rpc: deps.rpc, oneclick: deps.oneclick }, owner) : [];
+  const whitelist = await listWhitelist(db, user);
+  const bills: BillRow[] = [];
+  let invoices: InvoiceRow[] = [];
+  if (need.reminders && policy.reminders) {
+    bills.push(...(await listBills(db, owner, "scheduled", 0)));
+    if (bills.length === 100) bills.push(...(await listBills(db, owner, "scheduled", 1)));
+    invoices = await listIssuedInvoices(db, owner);
+  }
+  return { now, policy, balances, bills, invoices, whitelist };
+}
+
+/** An approval that never stored its quote (worker died mid-approve) is released after this long. */
+export const STUCK_APPROVE_MS = 120_000;
+const MAX_EXECUTING = 50;
+const MAX_REFRESH = 5;
+type ExecRow = Partial<TransferRow> & { p_id: string; p_updated_at: string; p_dep: string | null };
+
+/**
+ * Executing proposals follow their transfer: SUCCESS → done; FAILED/REFUNDED, or an unsigned quote that can no
+ * longer move funds (`unsignedForGoodRow`, the bill/payroll re-quote rule) → proposed again. One query loads them
+ * with their transfers; at most MAX_REFRESH stale transfers are refreshed from 1Click; one batch writes.
+ */
+async function settleExecuting(deps: AgentDeps, user: User): Promise<void> {
+  const { db, now } = deps;
+  const owner = user.account;
+  const { results } = await db
+    .prepare(
+      `SELECT p.id AS p_id, p.updated_at AS p_updated_at, p.deposit_address AS p_dep, w.* FROM agent_proposals p
+       LEFT JOIN withdrawals w ON w.deposit_address = p.deposit_address AND w.owner = p.owner
+       WHERE p.owner = ? AND p.status = 'executing' ORDER BY p.updated_at, p.id LIMIT ${MAX_EXECUTING}`,
+    )
+    .bind(owner)
+    .all<ExecRow>();
+  if (!results.length) return;
+  const ts = now.toISOString();
+  const set = (id: string, status: "done" | "proposed") =>
+    db.prepare("UPDATE agent_proposals SET status = ?, updated_at = ? WHERE id = ? AND owner = ? AND status = 'executing'").bind(status, ts, id, owner);
+  const stmts = [];
+  let refreshed = 0;
+  for (const r of results) {
+    if (!r.p_dep) {
+      if (now.getTime() - Date.parse(r.p_updated_at) > STUCK_APPROVE_MS) stmts.push(set(r.p_id, "proposed"));
+      continue;
+    }
+    if (!r.deposit_address) { stmts.push(set(r.p_id, "proposed")); continue; }
+    const { p_id: _i, p_updated_at: _u, p_dep: _d, ...rest } = r;
+    let row = rest as TransferRow;
+    let t;
+    try {
+      const peek = peekRow(row, now);
+      t = peek.view;
+      if (peek.stale && deps.oneclick.status && refreshed < MAX_REFRESH) {
+        refreshed++;
+        ({ view: t, row } = await refreshRow(deps as unknown as TransferDeps, user, row));
+      }
+    } catch {
+      continue; // unreadable row: leave it executing
+    }
+    if (t.status === "SUCCESS") stmts.push(set(r.p_id, "done"));
+    else if (t.status === "FAILED" || t.status === "REFUNDED" || unsignedForGoodRow(row, t, now)) stmts.push(set(r.p_id, "proposed"));
+  }
+  if (stmts.length) await db.batch(stmts);
+}
 
 /**
  * Evaluate the owner's rules and store the result: new drafts become `proposed`; open `proposed` rows whose
  * basis changed (key no longer produced, different params, or past `expires_at`) are expired. `executing` rows
- * are never touched here. A draft the owner dismissed with identical params is not proposed again. One batch
- * writes everything; at most 12 queries (11 for 50 bills / 100 invoices / 20 balances), the write batch chunked at 100 statements. A balances failure is 502 and nothing is written.
+ * are never expired here: they follow their transfer (`settleExecuting`, run first, even when throttled). A
+ * draft the owner dismissed with identical params is not proposed again. One batch writes everything; at most
+ * 14 queries plus up to 5 transfer refreshes and 1 batch for executing proposals (12 for 50 bills / 100
+ * invoices / 20 balances), the write batch chunked at 100 statements. A balances failure is 502 and nothing is written.
  */
 export async function runAgent(deps: AgentDeps, user: User, opts: { force?: boolean } = {}): Promise<Proposal[]> {
   const { db, now } = deps;
   const owner = user.account;
   const { policy } = await getPolicy(db, user);
   if (!policy) return [];
+  // 60 s throttle; `force` still enforces a hard 5 s minimum between runs per owner. Read before settling, so
+  // the settle writes themselves do not throttle this run.
+  const last = await db.prepare("SELECT MAX(updated_at) AS t FROM agent_proposals WHERE owner = ?").bind(owner).first<{ t: string | null }>();
+  await settleExecuting(deps, user);
   {
-    // 60 s throttle; `force` still enforces a hard 5 s minimum between runs per owner.
-    const last = await db.prepare("SELECT MAX(updated_at) AS t FROM agent_proposals WHERE owner = ?").bind(owner).first<{ t: string | null }>();
     const t = last?.t ? Date.parse(last.t) : NaN;
     if (!Number.isNaN(t) && now.getTime() - t < (opts.force ? FORCE_MIN_MS : THROTTLE_MS) && now.getTime() >= t) return listProposals(db, user);
   }
-  const balances = await getBalances({ db, rpc: deps.rpc, oneclick: deps.oneclick }, owner);
-  const whitelist = await listWhitelist(db, user);
-  const bills = await listBills(db, owner, "scheduled", 0);
-  if (bills.length === 100) bills.push(...(await listBills(db, owner, "scheduled", 1)));
-  const invoices = await listIssuedInvoices(db, owner);
-  const drafts = evaluate({ now, policy, balances, bills, invoices, whitelist });
+  const drafts = evaluate(await loadEvalInput(deps, user, policy));
 
   const open = await openProposals(db, owner);
   const { results: dismissed } = await db

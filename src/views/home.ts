@@ -52,6 +52,7 @@ export function mountHome(el: HTMLElement): () => void {
   let alive = true;
   el.innerHTML = `<div class="heading"><div><p class="eyebrow">OVERVIEW</p><h1>Home</h1><p class="muted" id="home-custody">Your funds are held in your own NEAR Intents account, controlled by your wallet.</p></div><div class="home-actions"><a class="primary" href="#/invoices/new">+ New invoice</a><a class="secondary" href="#/withdraw">Withdraw</a></div></div>
 <section class="panel" aria-labelledby="home-balance-title"><p class="eyebrow" id="home-balance-title">CASH</p><p class="home-total" id="home-total" role="status">Loading…</p><p class="muted"><small>USD values use a reference price and may differ from what you receive when withdrawing.</small></p><p class="error" id="home-balance-error" role="alert"></p><div class="home-cards" id="home-cards"></div></section>
+<p class="home-agent" id="home-agent" hidden></p>
 <div class="home-tiles"><section class="panel" aria-labelledby="home-recv-title"><p class="eyebrow" id="home-recv-title">RECEIVABLES</p><div id="home-recv"><p class="muted">Loading…</p></div></section>
 <section class="panel" aria-labelledby="home-pay-title"><p class="eyebrow" id="home-pay-title">PAYABLES</p><div id="home-pay"><p class="muted">Loading…</p></div></section>
 <section class="panel" aria-labelledby="home-month-title"><p class="eyebrow" id="home-month-title">THIS MONTH</p><div id="home-month"><p class="muted">Loading…</p></div></section></div>
@@ -62,6 +63,18 @@ export function mountHome(el: HTMLElement): () => void {
   api<Session>("/api/me").then(
     (s) => {
       if (alive) q("#home-custody").textContent = `Your funds are held in your own NEAR Intents account (${s.account}), controlled by your wallet.`;
+    },
+    () => {},
+  );
+
+  // The agent's open suggestions (the request also runs the throttled agent). Hidden on error or without rules.
+  api<{ status: string }[]>("/api/agent/proposals").then(
+    (list) => {
+      if (!alive) return;
+      const n = list.filter((p) => p.status === "proposed").length;
+      const box = q("#home-agent");
+      box.innerHTML = `<a class="secondary" href="#/agent">Agent suggestions (${n})</a>`;
+      box.hidden = false;
     },
     () => {},
   );
