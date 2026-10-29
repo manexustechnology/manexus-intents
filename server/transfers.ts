@@ -70,6 +70,8 @@ export type TransferQuote = {
   withdrawal: TransferView;
 };
 
+/** A stored `withdrawals` row, for callers that load several at once (see `refreshRow`). */
+export type TransferRow = Raw;
 type Raw = {
   deposit_address: string; owner: string; origin_asset: string; destination_asset: string; amount: string; recipient: string;
   intent_hash: string | null; status: string; upstream: string | null; intent: string | null; created_at: string; updated_at: string;
@@ -468,47 +470,86 @@ function stale(row: Raw, now: Date): boolean {
   return attempted && !TERMINAL.has(row.status) && !fresh;
 }
 
+/** The stored view of a loaded row and whether `refreshRow` would ask 1Click about it now. No query. */
+export function peekRow(row: TransferRow, now: Date): { view: TransferView; stale: boolean } {
+  return { view: toView(row, now), stale: stale(row, now) };
+}
+
+/**
+ * When this row was last checked with 1Click: its updated_at, or a later failed check (`checkedAttemptAt`,
+ * which never touches updated_at). Lets a caller that refreshes a few rows per call rotate failing ones back.
+ */
+export function lastChecked(row: TransferRow): string {
+  const c = upstreamOf(row).checkedAttemptAt;
+  return typeof c === "string" && c > row.updated_at ? c : row.updated_at;
+}
+
 /** The stored view without asking 1Click, and whether a `refreshTransfer` would ask it now. 404 when unknown. */
 export async function peekTransfer(deps: Pick<TransferDeps, "db" | "now">, user: User, depositAddress: string): Promise<{ view: TransferView; stale: boolean }> {
-  const row = await load(deps.db, user, depositAddress);
-  return { view: toView(row, deps.now), stale: stale(row, deps.now) };
+  return peekRow(await load(deps.db, user, depositAddress), deps.now);
 }
 
 /** Current status from 1Click. Upstream errors return the stored state with `refreshError`. */
 export async function refreshTransfer(deps: TransferDeps, user: User, depositAddress: string): Promise<TransferView> {
+  return (await refreshRow(deps, user, await load(deps.db, user, depositAddress))).view;
+}
+
+/**
+ * `refreshTransfer` for a row the caller already loaded (owner-scoped): at most one query, and the row as
+ * stored afterwards. A failed check records `checkedAttemptAt` in upstream and leaves updated_at alone.
+ */
+export async function refreshRow(deps: TransferDeps, user: User, row: TransferRow): Promise<{ view: TransferView; row: TransferRow }> {
   const { db, oneclick, now } = deps;
-  const row = await load(db, user, depositAddress);
-  if (!stale(row, now)) return toView(row, now);
+  if (row.owner !== user.account) throw new HttpError(404, "Transfer not found");
+  if (!stale(row, now)) return { view: toView(row, now), row };
+  const ts = now.toISOString();
+  const failed = async (refreshError: string) => {
+    await db
+      .prepare(
+        "UPDATE withdrawals SET upstream = json_set(COALESCE(upstream, '{}'), '$.checkedAttemptAt', ?) WHERE deposit_address = ? AND owner = ? AND status = ? AND json_valid(COALESCE(upstream, '{}'))",
+      )
+      .bind(ts, row.deposit_address, user.account, row.status)
+      .run();
+    return { view: { ...toView(row, now), refreshError }, row };
+  };
+  // The row as stored after a guarded UPDATE … RETURNING; reloaded only when a concurrent writer won.
+  const after = async (r: Raw | null) => {
+    const next = r ? { ...r } : await load(db, user, row.deposit_address);
+    return { view: toView(next, now), row: next };
+  };
   let s: SwapStatus;
   try {
     s = await oneclick.status(row.deposit_address);
   } catch (e) {
-    return { ...toView(row, now), refreshError: e instanceof HttpError ? e.message : "NEAR Intents is unreachable" };
+    return failed(e instanceof HttpError ? e.message : "NEAR Intents is unreachable");
   }
-  if (s.depositAddress !== undefined && s.depositAddress !== row.deposit_address) return { ...toView(row, now), refreshError: "NEAR Intents returned an unexpected response" };
+  if (s.depositAddress !== undefined && s.depositAddress !== row.deposit_address) return failed("NEAR Intents returned an unexpected response");
   // Until 1Click has seen the transfer, keep our own state: an unsigned/failed-submit row stays
   // AWAITING_SIGNATURE, and a submit still in flight (PROCESSING, no intent hash yet) stays PROCESSING
   // so that submit's failure revert (which requires PROCESSING) still applies.
   const unseen = s.status === "PENDING_DEPOSIT";
   const hold = unseen && (row.status === "AWAITING_SIGNATURE" || (row.status === "PROCESSING" && row.intent_hash == null));
-  const ts = now.toISOString();
   // A submit that never finished (worker died mid-relay) would be held PROCESSING forever: once the quote is
   // long past its deadline nothing should still be in flight, so close it out with an explicit marker. A submit
   // that completes after this still records its intent hash and moves the row back to PROCESSING.
   if (hold && row.status === "PROCESSING" && now.getTime() > time(stored(row).deadline) + STUCK_SUBMIT_MS) {
-    await db
-      .prepare("UPDATE withdrawals SET status = 'FAILED', upstream = ?, updated_at = ? WHERE deposit_address = ? AND owner = ? AND status = 'PROCESSING' AND intent_hash IS NULL")
-      .bind(JSON.stringify({ ...JSON.parse(trimmed(s)), stuckSubmit: true }), ts, row.deposit_address, user.account)
-      .run();
-    return toView(await load(db, user, row.deposit_address), now);
+    return after(
+      await db
+        .prepare(
+          "UPDATE withdrawals SET status = 'FAILED', upstream = ?, updated_at = ? WHERE deposit_address = ? AND owner = ? AND status = 'PROCESSING' AND intent_hash IS NULL RETURNING *",
+        )
+        .bind(JSON.stringify({ ...JSON.parse(trimmed(s)), stuckSubmit: true }), ts, row.deposit_address, user.account)
+        .first<Raw>(),
+    );
   }
   // A successful 1Click read: the only writer allowed to stamp updated_at after the deadline (INVARIANT above unsignedForGood).
   const status = hold ? row.status : s.status;
-  await db
-    .prepare("UPDATE withdrawals SET status = ?, upstream = ?, updated_at = ? WHERE deposit_address = ? AND owner = ? AND status = ?")
-    .bind(status, hold ? row.upstream : trimmed(s), ts, row.deposit_address, user.account, row.status)
-    .run();
-  return toView(await load(db, user, row.deposit_address), now);
+  return after(
+    await db
+      .prepare("UPDATE withdrawals SET status = ?, upstream = ?, updated_at = ? WHERE deposit_address = ? AND owner = ? AND status = ? RETURNING *")
+      .bind(status, hold ? row.upstream : trimmed(s), ts, row.deposit_address, user.account, row.status)
+      .first<Raw>(),
+  );
 }
 
 // INVARIANT (updated_at): only a successful upstream read (refreshTransfer after oneclick.status) may write
@@ -526,10 +567,19 @@ export const SUBMIT_GRACE_MS = 120_000;
  */
 export async function unsignedForGood(deps: Pick<TransferDeps, "db" | "now">, user: User, t: TransferView): Promise<boolean> {
   if (t.status !== "AWAITING_SIGNATURE" || !t.expired) return false;
-  const r = await deps.db.prepare("SELECT upstream FROM withdrawals WHERE deposit_address = ? AND owner = ?").bind(t.depositAddress, user.account).first<{ upstream: string | null }>();
+  const r = await deps.db
+    .prepare("SELECT upstream, intent FROM withdrawals WHERE deposit_address = ? AND owner = ?")
+    .bind(t.depositAddress, user.account)
+    .first<{ upstream: string | null; intent: string | null }>();
+  return unsignedForGoodRow(r ?? { upstream: null, intent: null }, t, deps.now);
+}
+
+/** `unsignedForGood` for the row `t` was built from (fresh from `refreshRow`). No query. */
+export function unsignedForGoodRow(row: Pick<TransferRow, "upstream" | "intent">, t: TransferView, now: Date): boolean {
+  if (t.status !== "AWAITING_SIGNATURE" || !t.expired) return false;
   let attempted = true; // unreadable upstream: assume a relay was attempted
   try {
-    const u: unknown = JSON.parse(r?.upstream ?? "null");
+    const u: unknown = JSON.parse(row.upstream ?? "null");
     attempted = isRec(u) && u.submitAttemptedAt !== undefined;
   } catch {
     /* keep attempted */
@@ -538,8 +588,8 @@ export async function unsignedForGood(deps: Pick<TransferDeps, "db" | "now">, us
   // A relay was attempted and may have landed. Only a successful 1Click check made after the grace period
   // (refreshTransfer's hold path writes updated_at on each one; errors and throttled reads do not) proves
   // it did not.
-  const graceEnd = new Date(t.deadline).getTime() + SUBMIT_GRACE_MS;
-  return !t.refreshError && deps.now.getTime() > graceEnd && new Date(t.updatedAt).getTime() > graceEnd;
+  const graceEnd = time(t.deadline) + SUBMIT_GRACE_MS;
+  return !t.refreshError && now.getTime() > graceEnd && time(t.updatedAt) > graceEnd;
 }
 
 /** An unsigned, unexpired quote the owner can resume signing after leaving the page. */
@@ -549,7 +599,13 @@ export type OpenQuote = { depositAddress: string; deadline: string; amountOutFor
 export async function openQuote(db: Db, user: User, t: TransferView | undefined): Promise<OpenQuote | undefined> {
   if (!t || t.status !== "AWAITING_SIGNATURE" || t.expired) return undefined;
   const r = await db.prepare("SELECT intent FROM withdrawals WHERE deposit_address = ? AND owner = ?").bind(t.depositAddress, user.account).first<{ intent: string | null }>();
-  const s = parseJson(r?.intent ?? null);
+  return openQuoteRow(r, t);
+}
+
+/** `openQuote` for the row `t` was built from. No query. */
+export function openQuoteRow(row: Pick<TransferRow, "intent"> | null, t: TransferView | undefined): OpenQuote | undefined {
+  if (!t || t.status !== "AWAITING_SIGNATURE" || t.expired) return undefined;
+  const s = parseJson(row?.intent ?? null);
   if (!isRec(s) || (s.standard !== "nep413" && s.standard !== "erc191")) return undefined;
   return { depositAddress: t.depositAddress, deadline: t.deadline, amountOutFormatted: t.amountOutFormatted, intent: { standard: s.standard, payload: s.payload }, transfer: t };
 }

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { base58 } from "@scure/base";
-import { createTestDb } from "./d1-shim.ts";
+import { createTestDb, type TestDb } from "./d1-shim.ts";
 import type { Db } from "../../server/db.ts";
 import type { NearRpc } from "../../server/near-rpc.ts";
 import type { OneClickToken, Quote, QuoteRequest, SwapStatus } from "../../server/oneclick.ts";
@@ -86,6 +86,7 @@ type F = ReturnType<typeof fakes>;
 const deps = (db: Db, f: F, now = NOW): TransferDeps => ({ db, rpc: f.rpc, oneclick: f.oneclick, now });
 const signed = (qt: { depositAddress: string; intent: { payload: unknown } }) => ({ depositAddress: qt.depositAddress, signedData: { standard: "nep413", payload: qt.intent.payload, ...NEP_SIG } });
 const count = async (db: Db, table: string) => (await db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).bind().first<{ n: number }>())!.n;
+type LineErrorT = { line: number; message: string };
 const lineErrors = (p: Promise<unknown>) => p.then(() => null, (e: HttpError) => ({ status: e.status, message: e.message, lineErrors: (e.extra as { lineErrors?: unknown })?.lineErrors }));
 
 const fiveLines = csv(`Ana,arb,USDC,${A1},1`, `Budi,arb,USDC,${A2},1`, `Citra,arb,USDC,${A3},1`, "Dewi,near-intents,USDC,dewi.near,1", "Eko,near,USDC,eko.near,1");
@@ -399,4 +400,117 @@ test("concurrent quotes for one line: the line's deposit address changes between
   assert.deepEqual(rows.map((r) => r.deposit_address), [won[0].value.depositAddress]);
   const b = await getBatch(deps(db, f), ALICE, v.batch.id);
   assert.equal(b.lines[0].depositAddress, won[0].value.depositAddress);
+});
+
+// --- D1 query budget (50 per Worker invocation on the Free plan; a db.batch counts as one) ---
+
+/** A 50-line batch with every line quoted (each quote's created_at moved back past the hourly open-quote limit). */
+async function fiftyQuoted(db: TestDb, f: F, submit: boolean) {
+  const names = Array.from({ length: 50 }, (_, k) => `P${k + 1}`);
+  const v = await createBatchFromBody(deps(db, f), ALICE, { title: "Big", originAsset: USDC, csv: csv(...names.map((n) => `${n},near-intents,USDC,${n.toLowerCase()}.near,1`)) });
+  const dep: string[] = [];
+  for (let n = 1; n <= 50; n++) {
+    const q = await quoteBatchLine(deps(db, f), ALICE, v.batch.id, n);
+    await db.prepare("UPDATE withdrawals SET created_at = ? WHERE deposit_address = ?").bind("2029-12-31T00:00:00.000Z", q.depositAddress).run();
+    if (submit) {
+      await submitTransfer(deps(db, f), ALICE, signed(q));
+      f.settle(q.depositAddress, "PROCESSING");
+    }
+    dep.push(q.depositAddress);
+  }
+  return { id: v.batch.id, dep };
+}
+
+test("query budget: getBatch on 50 in-flight lines stays within 3 + 10 queries", async () => {
+  const db = createTestDb();
+  const f = fakes({ balance: "100000000" });
+  const { id } = await fiftyQuoted(db, f, true);
+  db.queries = 0;
+  const b = await getBatch(deps(db, f, at(1)), ALICE, id);
+  console.log(`getBatch 50 in flight: ${db.queries} queries`);
+  assert.ok(db.queries <= 13, `${db.queries} queries`);
+  assert.deepEqual(b.summary, { sent: 0, processing: 50, awaiting: 0, failed: 0, total: 50 });
+});
+
+test("query budget: getBatch on 50 awaiting lines stays within 3 queries and still offers each open quote", async () => {
+  const db = createTestDb();
+  const f = fakes({ balance: "100000000" });
+  const { id, dep } = await fiftyQuoted(db, f, false);
+  db.queries = 0;
+  const b = await getBatch(deps(db, f, at(1)), ALICE, id);
+  console.log(`getBatch 50 awaiting: ${db.queries} queries`);
+  assert.ok(db.queries <= 3, `${db.queries} queries`);
+  assert.deepEqual(b.lines.map((l) => [l.state, l.canQuote, l.pendingQuote?.depositAddress]), dep.map((d) => ["awaiting", false, d]));
+  assert.ok(b.lines.every((l) => l.pendingQuote?.intent.standard === "nep413"));
+});
+
+test("query budget: a batch from 50 saved payees is created with one payee query", async () => {
+  const db = createTestDb();
+  const f = fakes({ balance: "100000000" });
+  const ids: string[] = [];
+  for (let k = 1; k <= 50; k++) ids.push((await createPayee(deps(db, f), ALICE, { name: `P${k}`, destinationAsset: USDC, recipientType: "INTENTS", recipient: `p${k}.near` })).id);
+  db.queries = 0;
+  const v = await createBatchFromBody(deps(db, f), ALICE, { title: "Nov", originAsset: USDC, payeeIds: ids, amounts: ids.map(() => "1") });
+  console.log(`create from 50 payees: ${db.queries} queries`);
+  assert.ok(db.queries <= 45, `${db.queries} queries`);
+  assert.deepEqual(v.lines.map((l) => l.name), ids.map((_, k) => `P${k + 1}`));
+  // Unknown, malformed and foreign ids are line errors, in input order.
+  const theirs = await createPayee(deps(db, f), MALLORY, { name: "M", destinationAsset: USDC, recipientType: "INTENTS", recipient: "m2.near" });
+  const e = await lineErrors(createBatchFromBody(deps(db, f), ALICE, { title: "Nov", originAsset: USDC, payeeIds: [ids[0], theirs.id, "nope", 7, ids[1]], amounts: ["1", "1", "1", "1", "1"] }));
+  assert.deepEqual((e?.lineErrors as LineErrorT[]).map((x) => [x.line, x.message]), [[2, "Payee not found"], [3, "Payee not found"], [4, "Payee not found"]]);
+});
+
+test("getBatch: lines whose 1Click check keeps failing rotate to the back instead of starving the rest", async () => {
+  const db = createTestDb();
+  const f = fakes({ balance: "100000000" });
+  const names = Array.from({ length: 12 }, (_, k) => `P${k + 1}`);
+  const v = await createBatchFromBody(deps(db, f), ALICE, { title: "Big", originAsset: USDC, csv: csv(...names.map((n) => `${n},near-intents,USDC,${n.toLowerCase()}.near,1`)) });
+  const dep: string[] = [];
+  for (let n = 1; n <= 12; n++) {
+    const q = await quoteBatchLine(deps(db, f), ALICE, v.batch.id, n);
+    await submitTransfer(deps(db, f), ALICE, signed(q));
+    f.settle(q.depositAddress, "PROCESSING");
+    dep.push(q.depositAddress);
+  }
+  const broken = new Set(dep.slice(0, 10));
+  const asked: string[] = [];
+  const real = f.oneclick.status;
+  f.oneclick.status = async (d: string) => {
+    asked.push(d);
+    if (broken.has(d)) throw new Error("down for this line");
+    return real(d);
+  };
+  const b1 = await getBatch(deps(db, f, at(1)), ALICE, v.batch.id);
+  assert.deepEqual(asked.slice().sort(), dep.slice(0, 10).sort());
+  assert.ok(b1.refreshError);
+  // The failed checks did not touch updated_at (only a successful 1Click read may).
+  const row = await db.prepare("SELECT updated_at FROM withdrawals WHERE deposit_address = ?").bind(dep[0]).first<{ updated_at: string }>();
+  assert.equal(row?.updated_at, NOW.toISOString());
+  asked.length = 0;
+  await getBatch(deps(db, f, at(2)), ALICE, v.batch.id);
+  assert.equal(asked.length, 10);
+  assert.ok(asked.includes(dep[10]) && asked.includes(dep[11]), "lines 11 and 12 get their turn");
+});
+
+test("getBatch (in-memory rows): an expired quote after a failed relay stays 'checking' until a 1Click read past the grace", async () => {
+  const db = createTestDb();
+  const f = fakes();
+  const v = await createBatchFromBody(deps(db, f), ALICE, { title: "Oct", originAsset: USDC, csv: fiveLines });
+  const q = await quoteBatchLine(deps(db, f), ALICE, v.batch.id, 1);
+  f.oneclick.submitIntent = async () => {
+    throw new Error("timeout");
+  };
+  await assert.rejects(submitTransfer(deps(db, f), ALICE, signed(q)));
+  f.settle(q.depositAddress, "PENDING_DEPOSIT");
+  const line = async (now: Date) => (await getBatch(deps(db, f, now), ALICE, v.batch.id)).lines[0];
+  assert.deepEqual([(await line(at(5))).state, (await line(at(5))).canQuote], ["awaiting", false]);
+  assert.deepEqual([(await line(at(11))).state, (await line(at(11))).canQuote], ["checking", false]); // inside grace
+  const real = f.oneclick.status;
+  f.oneclick.status = async () => {
+    throw new Error("down");
+  };
+  assert.deepEqual([(await line(at(13))).state, (await line(at(13))).canQuote], ["checking", false]); // 1Click unreachable
+  f.oneclick.status = real;
+  const l = await line(at(14));
+  assert.deepEqual([l.state, l.canQuote, l.pendingQuote], ["expired", true, undefined]);
 });

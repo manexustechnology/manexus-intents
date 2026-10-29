@@ -5,7 +5,10 @@ import type { Db } from "../../server/db.ts";
 
 const migrationsDir = fileURLToPath(new URL("../../migrations/", import.meta.url));
 
-export function createTestDb(): Db {
+/** A test database that also counts D1 queries: each executed statement is one, a `batch()` is one (D1's per-invocation limit). */
+export type TestDb = Db & { queries: number };
+
+export function createTestDb(): TestDb {
   const sqlite = new DatabaseSync(":memory:");
   sqlite.exec("PRAGMA foreign_keys = ON");
   for (const f of readdirSync(migrationsDir).filter((n) => n.endsWith(".sql")).sort()) {
@@ -13,8 +16,10 @@ export function createTestDb(): Db {
   }
   // Statements created by this shim run synchronously; batch() replays them inside BEGIN/COMMIT like D1.
   const runners = new WeakMap<object, () => { meta: { changes: number } }>();
-  return {
+  const db: TestDb = {
+    queries: 0,
     async batch(stmts) {
+      db.queries++;
       sqlite.exec("BEGIN");
       try {
         const out = stmts.map((s) => {
@@ -37,12 +42,15 @@ export function createTestDb(): Db {
           const runSync = () => ({ meta: { changes: Number(stmt.run(...params).changes) } });
           const bound = {
             async first<T>() {
+              db.queries++;
               return ((stmt.get(...params) as T | undefined) ?? null);
             },
             async all<T>() {
+              db.queries++;
               return { results: stmt.all(...params) as T[] };
             },
             async run() {
+              db.queries++;
               return runSync();
             },
           };
@@ -52,4 +60,5 @@ export function createTestDb(): Db {
       };
     },
   };
+  return db;
 }

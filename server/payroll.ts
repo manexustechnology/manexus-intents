@@ -12,15 +12,19 @@ import type { Db } from "./db.ts";
 import { HttpError } from "./http.ts";
 import type { OneClickToken, createOneClick } from "./oneclick.ts";
 import {
-  openQuote,
-  peekTransfer,
+  lastChecked,
+  openQuoteRow,
+  peekRow,
   quoteTransfer,
+  refreshRow,
   refreshTransfer,
   unsignedForGood,
+  unsignedForGoodRow,
   type OpenQuote,
   type RecipientType,
   type TransferDeps,
   type TransferQuote,
+  type TransferRow,
   type TransferView,
 } from "./transfers.ts";
 
@@ -236,10 +240,16 @@ async function rowsFromBody(deps: TransferDeps, user: User, b: Rec, tokens: OneC
   if (ids.length > MAX_PAYROLL_LINES) throw new HttpError(400, `A payout can have at most ${MAX_PAYROLL_LINES} lines.`);
   const errors: LineError[] = [];
   const rows: BatchRowInput[] = [];
+  // Every chosen payee in one query (D1 limits queries per request); an unknown or foreign id is a line error.
+  const wanted = [...new Set(ids.filter((id): id is string => typeof id === "string" && ID.test(id)))];
+  const { results } = wanted.length
+    ? await deps.db.prepare("SELECT * FROM payees WHERE owner = ? AND id IN (SELECT value FROM json_each(?))").bind(user.account, JSON.stringify(wanted)).all<PayeeRaw>()
+    : { results: [] as PayeeRaw[] };
+  const payees = new Map(results.map((r) => [r.id, { ...r }]));
   for (let k = 0; k < ids.length; k++) {
     const line = k + 1;
     const id = ids[k];
-    const p = typeof id === "string" && ID.test(id) ? await deps.db.prepare("SELECT * FROM payees WHERE id = ? AND owner = ?").bind(id, user.account).first<PayeeRaw>() : null;
+    const p = typeof id === "string" && ID.test(id) ? payees.get(id) : undefined;
     if (!p) {
       errors.push({ line, message: "Payee not found" });
       continue;
@@ -309,8 +319,9 @@ async function lineTransfer(deps: TransferDeps, user: User, l: LineRaw): Promise
  * Where a line stands, from its latest transfer. A line may be quoted (again) only when it has no
  * transfer, its transfer FAILED or was REFUNDED, or its quote expired unsigned for good (bills' rule:
  * after a failed relay, only a successful 1Click check past the grace period proves nothing landed).
+ * `gone` is `unsignedForGood` for `t`.
  */
-async function lineState(deps: TransferDeps, user: User, t: TransferView | undefined): Promise<{ state: LineState; canQuote: boolean }> {
+function lineState(t: TransferView | undefined, gone: boolean): { state: LineState; canQuote: boolean } {
   if (!t) return { state: "unsent", canQuote: true };
   switch (t.status) {
     case "SUCCESS":
@@ -321,7 +332,7 @@ async function lineState(deps: TransferDeps, user: User, t: TransferView | undef
       return { state: "refunded", canQuote: true };
     case "AWAITING_SIGNATURE":
       if (!t.expired) return { state: "awaiting", canQuote: false };
-      return (await unsignedForGood(deps, user, t)) ? { state: "expired", canQuote: true } : { state: "checking", canQuote: false };
+      return gone ? { state: "expired", canQuote: true } : { state: "checking", canQuote: false };
     default:
       return { state: "processing", canQuote: false };
   }
@@ -353,36 +364,41 @@ async function pool<T>(items: T[], limit: number, fn: (x: T) => Promise<void>): 
 }
 
 /**
- * Every line's latest transfer. In-flight lines due for a 1Click check are refreshed, but at most
- * REFRESH_PER_VIEW per call (stalest first, REFRESH_CONCURRENCY at a time); the rest show their stored
- * state and are refreshed on the next poll. A stored state is never less cautious: an expired quote
- * after a failed relay stays "checking" until a real 1Click read proves otherwise.
+ * Every line's latest transfer, loaded in one query. In-flight lines due for a 1Click check are refreshed,
+ * but at most REFRESH_PER_VIEW per call (least recently checked first, REFRESH_CONCURRENCY at a time); the
+ * rest show their stored state and are refreshed on the next poll. A line whose check failed counts as
+ * checked then (`lastChecked`), so failing lines rotate to the back instead of starving the others. A stored
+ * state is never less cautious: an expired quote after a failed relay stays "checking" until a real 1Click
+ * read proves otherwise. Query cost: 1 + one per refreshed line.
  */
-async function lineTransfers(deps: TransferDeps, user: User, raws: LineRaw[]): Promise<{ views: (TransferView | undefined)[]; refreshError?: string }> {
-  const views: (TransferView | undefined)[] = [];
-  const due: { k: number; updatedAt: string }[] = [];
+async function lineTransfers(
+  deps: TransferDeps, user: User, batchId: string, raws: LineRaw[],
+): Promise<{ lines: ({ view: TransferView; row: TransferRow } | undefined)[]; refreshError?: string }> {
+  const { results } = await deps.db
+    .prepare("SELECT * FROM withdrawals WHERE owner = ? AND deposit_address IN (SELECT deposit_address FROM payroll_lines WHERE batch_id = ?)")
+    .bind(user.account, batchId)
+    .all<TransferRow>();
+  const byAddress = new Map(results.map((r) => [r.deposit_address, { ...r }]));
+  const lines: ({ view: TransferView; row: TransferRow } | undefined)[] = [];
+  const due: { k: number; checked: string }[] = [];
   for (const [k, l] of raws.entries()) {
-    if (!l.deposit_address) {
-      views.push(undefined);
+    const row = l.deposit_address ? byAddress.get(l.deposit_address) : undefined;
+    if (!row) {
+      lines.push(undefined);
       continue;
     }
-    try {
-      const p = await peekTransfer(deps, user, l.deposit_address);
-      views.push(p.view);
-      if (p.stale) due.push({ k, updatedAt: p.view.updatedAt });
-    } catch (e) {
-      if (!(e instanceof HttpError && e.status === 404)) throw e;
-      views.push(undefined);
-    }
+    const p = peekRow(row, deps.now);
+    lines.push({ view: p.view, row });
+    if (p.stale) due.push({ k, checked: lastChecked(row) });
   }
-  due.sort((a, b) => (a.updatedAt < b.updatedAt ? -1 : a.updatedAt > b.updatedAt ? 1 : a.k - b.k));
+  due.sort((a, b) => (a.checked < b.checked ? -1 : a.checked > b.checked ? 1 : a.k - b.k));
   let refreshError: string | undefined;
   await pool(due.slice(0, REFRESH_PER_VIEW), REFRESH_CONCURRENCY, async ({ k }) => {
-    const t = await refreshTransfer(deps, user, raws[k].deposit_address!);
-    views[k] = t;
-    refreshError ??= t.refreshError;
+    const r = await refreshRow(deps, user, lines[k]!.row);
+    lines[k] = r;
+    refreshError ??= r.view.refreshError;
   });
-  return { views, ...(refreshError ? { refreshError } : {}) };
+  return { lines, ...(refreshError ? { refreshError } : {}) };
 }
 
 /** The batch with every line's latest transfer (see `lineTransfers`) and the derived summary. */
@@ -393,13 +409,14 @@ export async function getBatch(deps: TransferDeps, user: User, id: string): Prom
 async function batchView(deps: TransferDeps, user: User, id: string, tokens: OneClickToken[]): Promise<BatchView> {
   const b = await loadBatch(deps.db, user, id);
   const raws = await lineRows(deps.db, b.id);
-  const { views, refreshError } = await lineTransfers(deps, user, raws);
+  const { lines: loaded, refreshError } = await lineTransfers(deps, user, b.id, raws);
   const lines: BatchLine[] = [];
   for (const [k, l] of raws.entries()) {
-    const transfer = views[k];
-    const { state, canQuote } = await lineState(deps, user, transfer);
+    const transfer = loaded[k]?.view;
+    const row = loaded[k]?.row ?? null;
+    const { state, canQuote } = lineState(transfer, !!row && !!transfer && unsignedForGoodRow(row, transfer, deps.now));
     const t = tokenInfo(l.destination_asset, tokens);
-    const pendingQuote = await openQuote(deps.db, user, transfer);
+    const pendingQuote = openQuoteRow(row, transfer);
     lines.push({
       n: l.n, name: l.name, destinationAsset: l.destination_asset, recipientType: l.recipient_type, recipient: l.recipient, amount: l.amount,
       symbol: t.symbol, blockchain: t.blockchain, ...(t.decimals !== undefined ? { decimals: t.decimals } : {}),
@@ -429,7 +446,8 @@ export async function quoteBatchLine(deps: TransferDeps, user: User, batchId: st
   const l = await deps.db.prepare("SELECT * FROM payroll_lines WHERE batch_id = ? AND n = ?").bind(b.id, n).first<LineRaw>();
   if (!l) throw new HttpError(404, "Line not found");
   const line: LineRaw = { ...l, n: Number(l.n) };
-  const { canQuote } = await lineState(deps, user, await lineTransfer(deps, user, line));
+  const current = await lineTransfer(deps, user, line);
+  const { canQuote } = lineState(current, !!current && (await unsignedForGood(deps, user, current)));
   if (!canQuote) throw new HttpError(409, "Already sent");
 
   const qt = await quoteTransfer(deps, user, {
