@@ -49,7 +49,7 @@ test("challenge shape", async () => {
   assert.equal(near.message, "Sign in to Manexus Intents");
   assert.notEqual(near.nonce, evm.nonce);
   const row = await db.prepare("SELECT * FROM challenges WHERE nonce = ?").bind(near.nonce).first<Record<string, unknown>>();
-  assert.deepEqual({ ...row }, { nonce: near.nonce, account: "alice.near", kind: "near", expires_at: NOW + 5 * MIN, used: 0 });
+  assert.deepEqual({ ...row }, { nonce: near.nonce, account: "alice.near", kind: "near", expires_at: NOW + 5 * MIN, used: 0, purpose: "login" });
 });
 
 test("challenge rejects invalid accounts and kinds", async () => {

@@ -37,7 +37,7 @@ export async function createChallenge(
   const nonce = base64.encode(crypto.getRandomValues(new Uint8Array(32)));
   await db.prepare("DELETE FROM challenges WHERE expires_at <= ?").bind(now).run();
   await db
-    .prepare("INSERT INTO challenges (nonce, account, kind, expires_at, used) VALUES (?, ?, ?, ?, 0)")
+    .prepare("INSERT INTO challenges (nonce, account, kind, expires_at, used, purpose) VALUES (?, ?, ?, ?, 0, 'login')")
     .bind(nonce, acct, kind, now + CHALLENGE_TTL_MS)
     .run();
   return { nonce, message: kind === "evm" ? evmMessage(acct, nonce) : NEAR_MESSAGE, recipient: RECIPIENT };
@@ -79,34 +79,48 @@ export type LoginBody = { kind: unknown; account: unknown; nonce: unknown; signa
 
 const fail = () => new HttpError(401, "Sign-in failed");
 
+/** What a wallet signed for a challenge: `message` is the ERC-191 personal_sign text or the NEP-413 `message`. */
+export type SignedMessage = { kind: unknown; account: string; nonce: unknown; signature: unknown; publicKey?: unknown; message: string; purpose: string };
+
+/**
+ * Consume the challenge `nonce` atomically (exists, unused, unexpired, bound to this account, kind and
+ * purpose), then verify the signature over `message`: ERC-191 by `account`, or NEP-413
+ * `{message, nonce (the challenge's 32 bytes), recipient: "manexus-intents"}` by a full-access key of
+ * `account`. `account` must already be normalized. Returns false on any failure; the challenge is spent
+ * even when the signature is bad.
+ */
+export async function verifySignedMessage(db: Db, rpc: NearRpc, m: SignedMessage, now = Date.now()): Promise<boolean> {
+  const { kind, account, nonce, signature, publicKey, message, purpose } = m;
+  if (typeof nonce !== "string" || typeof signature !== "string") return false;
+
+  const consumed = await db
+    .prepare("UPDATE challenges SET used = 1 WHERE nonce = ? AND account = ? AND kind = ? AND purpose = ? AND used = 0 AND expires_at > ?")
+    .bind(nonce, account, kind, purpose, now)
+    .run();
+  if (consumed.meta.changes !== 1) return false;
+
+  if (kind === "evm") {
+    if (!isHex(signature)) return false;
+    return verifyMessage({ address: account as `0x${string}`, message, signature }).catch(() => false);
+  }
+
+  // NEAR (NEP-413)
+  if (typeof publicKey !== "string" || !publicKey.startsWith("ed25519:")) return false;
+  const pk = decodeOrNull(() => base58.decode(publicKey.slice("ed25519:".length)));
+  const sig = decodeOrNull(() => base64.decode(signature));
+  const nonceBytes = decodeOrNull(() => base64.decode(nonce));
+  if (!pk || pk.length !== 32 || !sig || sig.length !== 64 || !nonceBytes || nonceBytes.length !== 32) return false;
+  const hash = nep413Hash({ message, nonce: nonceBytes, recipient: RECIPIENT, callbackUrl: null });
+  if (!decodeOrNull(() => ed25519.verify(sig, hash, pk))) return false;
+  const key = await rpc.viewAccessKey(account, "ed25519:" + base58.encode(pk));
+  return !!key && key.permission === "FullAccess";
+}
+
 export async function verifyLogin(db: Db, rpc: NearRpc, body: LoginBody, now = Date.now()): Promise<string> {
   const { kind, nonce, signature, publicKey } = body;
   const account = normalizeAccount(body.account, kind);
   if (!account || typeof nonce !== "string" || typeof signature !== "string") throw fail();
-
-  // Consume the challenge atomically: exists, unused, unexpired, and bound to this account/kind.
-  const consumed = await db
-    .prepare("UPDATE challenges SET used = 1 WHERE nonce = ? AND account = ? AND kind = ? AND used = 0 AND expires_at > ?")
-    .bind(nonce, account, kind, now)
-    .run();
-  if (consumed.meta.changes !== 1) throw fail();
-
-  if (kind === "evm") {
-    if (!isHex(signature)) throw fail();
-    const ok = await verifyMessage({ address: account as `0x${string}`, message: evmMessage(account, nonce), signature }).catch(() => false);
-    if (!ok) throw fail();
-    return account;
-  }
-
-  // NEAR (NEP-413)
-  if (typeof publicKey !== "string" || !publicKey.startsWith("ed25519:")) throw fail();
-  const pk = decodeOrNull(() => base58.decode(publicKey.slice("ed25519:".length)));
-  const sig = decodeOrNull(() => base64.decode(signature));
-  const nonceBytes = decodeOrNull(() => base64.decode(nonce));
-  if (!pk || pk.length !== 32 || !sig || sig.length !== 64 || !nonceBytes || nonceBytes.length !== 32) throw fail();
-  const hash = nep413Hash({ message: NEAR_MESSAGE, nonce: nonceBytes, recipient: RECIPIENT, callbackUrl: null });
-  if (!decodeOrNull(() => ed25519.verify(sig, hash, pk))) throw fail();
-  const key = await rpc.viewAccessKey(account, "ed25519:" + base58.encode(pk));
-  if (!key || key.permission !== "FullAccess") throw fail();
+  const message = kind === "evm" ? evmMessage(account, nonce) : NEAR_MESSAGE;
+  if (!(await verifySignedMessage(db, rpc, { kind, account, nonce, signature, publicKey, message, purpose: "login" }, now))) throw fail();
   return account;
 }

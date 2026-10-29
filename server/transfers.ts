@@ -11,6 +11,7 @@ import type { Db } from "./db.ts";
 import { HttpError } from "./http.ts";
 import type { NearRpc } from "./near-rpc.ts";
 import type { OneClickToken, Quote, QuoteRequest, SwapStatus, createOneClick } from "./oneclick.ts";
+import { enforceLimits } from "./policy.ts";
 
 type User = { account: string; kind: "near" | "evm" };
 type Standard = "nep413" | "erc191";
@@ -265,6 +266,11 @@ async function checkRequest(deps: TransferDeps, user: User, input: TransferReque
     .first<{ n: number }>();
   if ((open?.n ?? 0) >= MAX_OPEN_QUOTES_PER_HOUR) throw new HttpError(429, `Too many ${NOUN[kind]} quotes. Try again later.`);
 
+  // Spending limits (server/policy.ts). EXACT_INPUT: the amount that leaves is known now. EXACT_OUTPUT: it is
+  // the quote's amountIn, checked again in prepareChecked; here 0n still checks the whitelist and refuses
+  // when the 24 h cap is already used up, before asking 1Click.
+  await enforceLimits(deps, user, { kind, originAsset: held.tokenId, destinationAsset: dest.assetId, recipient, billId: billId ?? undefined }, swapType === "EXACT_INPUT" ? BigInt(amount) : 0n);
+
   const request: QuoteRequest = {
     dry: false,
     swapType,
@@ -306,6 +312,7 @@ async function prepareChecked(deps: TransferDeps, user: User, c: Checked, q: Quo
     // The recipient must never receive less than the bill/payroll amount, even at the slippage floor.
     if (BigInt(q.minAmountOut) < BigInt(c.amount)) throw new HttpError(502, "NEAR Intents returned an unexpected response");
     sent = q.amountIn;
+    await enforceLimits(deps, user, { kind: c.kind, originAsset: c.held.tokenId, destinationAsset: c.dest.assetId, recipient: c.recipient, billId: c.billId ?? undefined }, BigInt(sent));
   }
 
   const standard: Standard = user.kind === "near" ? "nep413" : "erc191";
@@ -424,6 +431,17 @@ export async function submitTransfer(deps: TransferDeps, user: User, body: { dep
       .first<{ source: string; invoice_status: string | null }>();
     if (b && b.source === "manexus" && b.invoice_status !== "issued") throw new HttpError(409, "The vendor invoice is no longer payable");
   }
+
+  // Spending limits again, against what is committed now. Two quotes taken in parallel can each pass the
+  // quote-time 24 h check (neither saw the other's row); here only transfers already relayed (or in flight)
+  // count, not other unsigned quotes, so the first one signed wins and the next is refused. This narrows the
+  // race to two submits running concurrently between this read and the claim below; the policy and whitelist
+  // are also re-read, so a tightened cap or a removed whitelist entry blocks an older quote.
+  await enforceLimits(
+    deps, user,
+    { kind: row.kind, originAsset: row.origin_asset, destinationAsset: row.destination_asset, recipient: row.recipient, billId: row.bill_id ?? undefined },
+    BigInt(row.amount), { committedOnly: true },
+  );
 
   // See the updated_at INVARIANT above unsignedForGood: `ts` is checked-unexpired, so these writes stay <= deadline.
   const ts = now.toISOString();
