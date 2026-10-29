@@ -3,6 +3,7 @@ import { escapeHTML as esc } from "../shared/text.ts";
 import { api, ApiError } from "./api.ts";
 import { mountInvoice } from "./views/invoice-detail.ts";
 import { mountInvoices } from "./views/invoices.ts";
+import { mountPay } from "./views/pay.ts";
 import { mountLogin } from "./views/login.ts";
 import { disconnectWallet, type Session } from "./wallet/index.ts";
 
@@ -51,7 +52,7 @@ registerView("home", placeholder("Home"));
 registerView("invoices", mountInvoices);
 registerView("invoice", mountInvoice);
 registerView("withdraw", placeholder("Withdraw"));
-registerView("pay", placeholder("Pay invoice"));
+registerView("pay", mountPay);
 
 const NAV: [string, string, string, string][] = [
   ["home", "#/", "◫", "Home"],

@@ -31,7 +31,7 @@ function totalHtml(d: InvoiceDraft): string {
   }
 }
 
-function details(d: InvoiceDraft): string {
+export function details(d: InvoiceDraft): string {
   const t = settlementToken(d.tokenId);
   const line = (l: InvoiceDraft["items"][number]) => {
     let lt = "";

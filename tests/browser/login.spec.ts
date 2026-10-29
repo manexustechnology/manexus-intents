@@ -37,7 +37,7 @@ test("private routes require sign-in; the pay page does not", async ({ page }) =
   await page.goto("/#/invoices");
   await expect(page.getByRole("button", { name: "Connect EVM wallet" })).toBeVisible();
   await page.goto("/#/pay/abc");
-  await expect(page.getByRole("heading", { name: "Pay invoice" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Invoice unavailable" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Connect NEAR wallet" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Connect EVM wallet" })).toHaveCount(0);
 });

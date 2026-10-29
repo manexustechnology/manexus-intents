@@ -119,11 +119,16 @@ export async function cancelInvoice(db: Db, owner: string, id: string, now: stri
   return getInvoice(db, owner, id);
 }
 
-export async function getPublicInvoice(db: Db, publicId: string): Promise<PublicInvoice> {
+/** Internal lookup for public (payer-facing) flows: 404 if missing or still a draft. */
+export async function getInvoiceByPublicId(db: Db, publicId: string): Promise<InvoiceRow> {
   if (!ID.test(publicId)) throw new HttpError(404, "Invoice not found");
   const r = await db.prepare(`SELECT ${COLS} FROM invoices WHERE public_id = ?`).bind(publicId).first<Raw>();
   if (!r || r.status === "draft") throw new HttpError(404, "Invoice not found");
-  const inv = row(r);
+  return row(r);
+}
+
+export async function getPublicInvoice(db: Db, publicId: string): Promise<PublicInvoice> {
+  const inv = await getInvoiceByPublicId(db, publicId);
   const token = settlementToken(inv.tokenId);
   return {
     publicId: inv.publicId,

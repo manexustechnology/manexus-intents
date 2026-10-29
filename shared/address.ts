@@ -29,3 +29,8 @@ export function validDestination(chain: string, address: string): boolean {
       return false;
   }
 }
+
+/** Chains we can validate a refund address for (and so can refund to). */
+export function supportedChain(chain: string): boolean {
+  return EVM_CHAINS.has(chain) || ["near", "sol", "btc", "tron"].includes(chain);
+}

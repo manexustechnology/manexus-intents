@@ -1433,3 +1433,20 @@ a.primary {
 .badge.status-cancelled {
   color: #7a7a7a;
 }
+
+.pay-instructions .pay-field {
+  display: grid;
+  gap: 6px;
+  margin: 14px 0;
+}
+.pay-instructions code {
+  display: block;
+  overflow-wrap: anywhere;
+  background: #f5f8f2;
+  padding: 12px;
+  border-radius: 8px;
+  font-size: 14px;
+}
+#pay-token {
+  width: 100%;
+}
