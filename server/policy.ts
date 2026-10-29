@@ -298,7 +298,9 @@ async function spentInWindow(db: Db, owner: string, originAsset: string, now: Da
   // that may move funds (PROCESSING, SUCCESS and the in-flight 1Click statuses), plus unexpired unsigned
   // quotes: all of them normally, only those whose relay was attempted (upstream set, it may still land) when
   // committedOnly. REFUNDED/FAILED and expired unsigned quotes moved nothing. `exclude` leaves out the row
-  // being submitted (its amount is passed separately).
+  // being submitted (its amount is passed separately). An attempted relay that is never refreshed drops out of
+  // the count once its deadline passes (it may in theory still settle until the quote deadline + grace); a
+  // refresh that sees it moves it to PENDING/PROCESSING/SUCCESS, which count again.
   // The window keys on created_at (quote time), not on when the transfer was signed or settled.
   const ts = now.toISOString();
   const { results } = await db

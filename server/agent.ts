@@ -13,7 +13,7 @@ import type { Db } from "./db.ts";
 import { HttpError } from "./http.ts";
 import { listIssuedInvoices } from "./invoices.ts";
 import type { NearRpc } from "./near-rpc.ts";
-import type { OneClickToken, SwapStatus } from "./oneclick.ts";
+import type { OneClickToken } from "./oneclick.ts";
 import { peekRow, refreshRow, unsignedForGoodRow, type TransferDeps, type TransferRow } from "./transfers.ts";
 import type { InvoiceRow } from "../shared/invoice.ts";
 
@@ -25,7 +25,11 @@ export type Proposal = {
   id: string; type: ProposalType; dedupKey: string; params: Record<string, string>; status: ProposalStatus;
   depositAddress?: string; createdAt: string; updatedAt: string; expiresAt: string;
 };
-export type EvalInput = { now: Date; policy: Policy; balances: Balance[]; bills: BillRow[]; invoices: InvoiceRow[]; whitelist: WhitelistEntry[] };
+export type EvalInput = {
+  now: Date; policy: Policy; balances: Balance[]; bills: BillRow[]; invoices: InvoiceRow[]; whitelist: WhitelistEntry[];
+  /** Origin tokens of convert/sweep proposals being executed: no other convert/sweep draft for them (one signable quote per token). */
+  busyTokens?: ReadonlySet<string>;
+};
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
@@ -49,6 +53,7 @@ const dayMs = (d: string) => (/^\d{4}-\d{2}-\d{2}$/.test(d) ? Date.parse(`${d}T0
 
 export function evaluate(input: EvalInput): ProposalDraft[] {
   const { now, policy, balances, bills, invoices, whitelist } = input;
+  const busy = input.busyTokens ?? new Set<string>();
   const out: ProposalDraft[] = [];
   const bill: ProposalDraft[] = [], follow: ProposalDraft[] = [];
   const hourLater = new Date(now.getTime() + HOUR).toISOString();
@@ -58,7 +63,7 @@ export function evaluate(input: EvalInput): ProposalDraft[] {
   if (c?.enabled) {
     const min = BigInt(c.minUsdCents);
     for (const b of balances) {
-      if (b.tokenId === c.targetTokenId || !isUnits(b.amount) || BigInt(b.amount) <= 0n) continue;
+      if (b.tokenId === c.targetTokenId || busy.has(b.tokenId) || !isUnits(b.amount) || BigInt(b.amount) <= 0n) continue;
       const cents = usdCents(b.usd);
       if (cents === undefined || cents < min) continue;
       out.push({ type: "convert", dedupKey: `convert:${b.tokenId}`, params: { originAsset: b.tokenId, destinationAsset: c.targetTokenId, amount: b.amount }, expiresAt: hourLater });
@@ -66,7 +71,7 @@ export function evaluate(input: EvalInput): ProposalDraft[] {
   }
 
   const s = policy.sweep;
-  if (s?.enabled && whitelist.some((w) => w.id === s.whitelistId)) {
+  if (s?.enabled && !busy.has(s.tokenId) && whitelist.some((w) => w.id === s.whitelistId)) {
     const bal = balances.find((b) => b.tokenId === s.tokenId);
     if (bal && isUnits(bal.amount) && BigInt(bal.amount) > BigInt(s.thresholdUnits)) {
       const amount = BigInt(bal.amount) - BigInt(s.keepUnits);
@@ -129,16 +134,18 @@ export async function listProposals(db: Db, user: User): Promise<Proposal[]> {
 export type AgentDeps = {
   db: Db; rpc: NearRpc;
   /** With `status`, executing proposals' transfers are also refreshed from 1Click (a few per run). */
-  oneclick: { tokens(): Promise<OneClickToken[]>; status?(depositAddress: string): Promise<SwapStatus> };
+  oneclick: { tokens(): Promise<OneClickToken[]>; status?: TransferDeps["oneclick"]["status"] };
   now: Date;
 };
 
 /**
  * The inputs `evaluate` reads, loaded with bounded queries. `balances: false` skips the balance read (bills and
  * invoices drafts do not depend on it), `reminders: false` skips bills and invoices (convert/sweep do not).
+ * With balances, also the origin tokens of executing convert/sweep proposals (`busyTokens`), except `excludeId`.
  */
 export async function loadEvalInput(
-  deps: AgentDeps, user: User, policy: Policy, need: { balances: boolean; reminders: boolean } = { balances: true, reminders: true },
+  deps: AgentDeps, user: User, policy: Policy,
+  need: { balances: boolean; reminders: boolean; excludeId?: string } = { balances: true, reminders: true },
 ): Promise<EvalInput> {
   const { db, now } = deps;
   const owner = user.account;
@@ -151,11 +158,19 @@ export async function loadEvalInput(
     if (bills.length === 100) bills.push(...(await listBills(db, owner, "scheduled", 1)));
     invoices = await listIssuedInvoices(db, owner);
   }
-  return { now, policy, balances, bills, invoices, whitelist };
+  let busyTokens = new Set<string>();
+  if (need.balances) {
+    const { results } = await db
+      .prepare("SELECT params FROM agent_proposals WHERE owner = ? AND status = 'executing' AND type IN ('convert','sweep') AND id != ? LIMIT 50")
+      .bind(owner, need.excludeId ?? "")
+      .all<{ params: string }>();
+    busyTokens = new Set(results.map((r) => (JSON.parse(r.params) as Record<string, string>).originAsset));
+  }
+  return { now, policy, balances, bills, invoices, whitelist, busyTokens };
 }
 
 /** An approval that never stored its quote (worker died mid-approve) is released after this long. */
-export const STUCK_APPROVE_MS = 120_000;
+export const STUCK_APPROVE_MS = 5 * 60_000; // well above the worst approve (RPC and 1Click calls time out at 15 s each)
 const MAX_EXECUTING = 50;
 const MAX_REFRESH = 5;
 type ExecRow = Partial<TransferRow> & { p_id: string; p_updated_at: string; p_dep: string | null };
@@ -194,9 +209,10 @@ async function settleExecuting(deps: AgentDeps, user: User): Promise<void> {
     try {
       const peek = peekRow(row, now);
       t = peek.view;
-      if (peek.stale && deps.oneclick.status && refreshed < MAX_REFRESH) {
+      const status = deps.oneclick.status;
+      if (peek.stale && status && refreshed < MAX_REFRESH) {
         refreshed++;
-        ({ view: t, row } = await refreshRow(deps as unknown as TransferDeps, user, row));
+        ({ view: t, row } = await refreshRow({ db, now, oneclick: { status } }, user, row));
       }
     } catch {
       continue; // unreadable row: leave it executing
@@ -212,7 +228,7 @@ async function settleExecuting(deps: AgentDeps, user: User): Promise<void> {
  * basis changed (key no longer produced, different params, or past `expires_at`) are expired. `executing` rows
  * are never expired here: they follow their transfer (`settleExecuting`, run first, even when throttled). A
  * draft the owner dismissed with identical params is not proposed again. One batch writes everything; at most
- * 14 queries plus up to 5 transfer refreshes and 1 batch for executing proposals (12 for 50 bills / 100
+ * 15 queries plus up to 5 transfer refreshes and 1 batch for executing proposals (13 for 50 bills / 100
  * invoices / 20 balances), the write batch chunked at 100 statements. A balances failure is 502 and nothing is written.
  */
 export async function runAgent(deps: AgentDeps, user: User, opts: { force?: boolean } = {}): Promise<Proposal[]> {

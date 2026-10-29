@@ -8,7 +8,7 @@ import type { OneClickToken, Quote, QuoteRequest, SwapStatus } from "../../serve
 import type { Policy } from "../../server/policy.ts";
 import { HttpError } from "../../server/http.ts";
 import { SETTLEMENT_TOKENS } from "../../shared/assets.ts";
-import { listProposals, runAgent, type Proposal } from "../../server/agent.ts";
+import { listProposals, runAgent, STUCK_APPROVE_MS, type Proposal } from "../../server/agent.ts";
 import { approveProposal, OUT_OF_DATE } from "../../server/agent-actions.ts";
 import { submitTransfer, type TransferQuote } from "../../server/transfers.ts";
 import { onRequestPost as approvePost } from "../../functions/api/agent/proposals/[id]/approve.ts";
@@ -264,14 +264,15 @@ test("runAgent settles executing proposals: SUCCESS → done, REFUNDED → propo
   assert.ok(open.some((p) => p.dedupKey === c.dedupKey && p.status === "proposed"));
 });
 
-test("an approval that never stored its quote is released after 2 minutes", async () => {
+test("an approval that never stored its quote is released after STUCK_APPROVE_MS (5 minutes)", async () => {
   const w = world({ [USDT]: "120000000" });
   await setPolicy(w.db, ALICE.account, CONVERT);
   const p = byType(await runAgent(w.deps(), ALICE), "convert");
   await w.db.prepare("UPDATE agent_proposals SET status = 'executing', updated_at = ? WHERE id = ?").bind(NOW.toISOString(), p.id).run();
-  await runAgent(w.deps(at(60_000)), ALICE);
+  assert.equal(STUCK_APPROVE_MS, 300_000);
+  await runAgent(w.deps(at(STUCK_APPROVE_MS)), ALICE);
   assert.equal((await status(w.db, p.id)).status, "executing");
-  await runAgent(w.deps(at(121_000)), ALICE);
+  await runAgent(w.deps(at(STUCK_APPROVE_MS + 1000)), ALICE);
   assert.equal((await status(w.db, p.id)).status, "proposed");
 });
 
@@ -321,4 +322,48 @@ test("route: POST /api/agent/proposals/:id/approve needs a session; follow-up li
   const r = await approvePost({ request: req(ali), env, params: { id: p.id } } as never);
   assert.equal(r.status, 200);
   assert.deepEqual(await r.json(), { followUp: { payUrl: "https://intents.example.test/#/pay/pub-i1" } });
+});
+
+test("a slow approve released mid-flight (and re-approved) gets 409 and no quote; the re-approval links normally", async () => {
+  const w = world({ [USDT]: "120000000" });
+  await setPolicy(w.db, ALICE.account, CONVERT);
+  const p = byType(await runAgent(w.deps(), ALICE), "convert");
+  // While approve A waits for 1Click, the proposal is released (stuck rule) and approved again as B.
+  const origQuote = w.deps().oneclick.quote;
+  let second: TransferQuote | undefined;
+  let inner = false;
+  w.deps().oneclick.quote = async (r: QuoteRequest) => {
+    if (!inner) {
+      inner = true;
+      await w.db.prepare("UPDATE agent_proposals SET status = 'proposed' WHERE id = ?").bind(p.id).run();
+      second = (await approveProposal(w.deps(at(STUCK_APPROVE_MS + 1000)), ALICE, p.id, {})) as TransferQuote;
+    }
+    return origQuote(r);
+  };
+  await stale(approveProposal(w.deps(), ALICE, p.id, {}));
+  assert.ok(second);
+  assert.deepEqual(await status(w.db, p.id), { status: "executing", deposit_address: second!.depositAddress });
+});
+
+test("no second convert/sweep draft for a token that already has an executing proposal", async () => {
+  const w = world({ [USDT]: "500000000" });
+  await w.db.prepare("INSERT INTO whitelist (id, owner, label, destination_asset, recipient_type, recipient, created_at) VALUES ('w1', ?, 'Cold', ?, 'INTENTS', 'cold.near', 't')").bind(ALICE.account, USDT).run();
+  await setPolicy(w.db, ALICE.account, { ...CONVERT, sweep: { ...SWEEP.sweep, tokenId: USDT } });
+  const ps = await runAgent(w.deps(), ALICE);
+  const conv = byType(ps, "convert"), sweep = byType(ps, "sweep");
+  await approveProposal(w.deps(), ALICE, conv.id, {});
+  // The sweep on the same token is out of date while the convert is in flight.
+  await stale(approveProposal(w.deps(), ALICE, sweep.id, {}));
+  const after = await runAgent(w.deps(at(120_000)), ALICE);
+  assert.deepEqual(after.map((x) => [x.type, x.status]), [["convert", "executing"]]);
+});
+
+test("pay_bill approve without a string originAsset is 400 and the proposal stays open", async () => {
+  const w = world({ [USDC]: "500000000" });
+  await insBill(w.db, "b1");
+  await setPolicy(w.db, ALICE.account, REMIND);
+  const p = byType(await runAgent(w.deps(), ALICE), "pay_bill");
+  await rejectsWith(approveProposal(w.deps(), ALICE, p.id, { originAsset: 5 as unknown as string }), 400, "Choose a token from your balance.");
+  assert.equal((await status(w.db, p.id)).status, "proposed");
+  assert.equal(w.calls.quote.length, 0);
 });

@@ -23,7 +23,7 @@ const STALE = Symbol("stale");
  * whitelist entry must still exist; otherwise the proposal is expired and 409 "This suggestion is out of date".
  * Then the quote: convert → in-account swap (1% slippage); sweep → withdraw EXACT_INPUT to the whitelist entry;
  * pay_bill → `quoteBillPayment` from `originAsset`; follow_up_invoice → the pay link, and the proposal is done.
- * Any failure before the quote is stored releases the proposal back to `proposed`. The stored deposit address
+ * Any failure before the quote is stored releases the proposal back to `proposed` (guarded on our claim). The stored deposit address
  * lets `runAgent` follow the transfer (SUCCESS → done; failed/refunded/unsigned for good → proposed).
  */
 export async function approveProposal(deps: ApproveDeps, user: User, id: string, body: { originAsset?: string }): Promise<ApproveResult> {
@@ -35,8 +35,11 @@ export async function approveProposal(deps: ApproveDeps, user: User, id: string,
     .prepare(`UPDATE agent_proposals SET status = 'executing', updated_at = ? WHERE id = ? AND owner = ? AND status = 'proposed' AND expires_at > ? RETURNING ${COLS}`)
     .bind(ts, id, owner, ts)
     .first<ProposalRaw>();
-  const move = (from: string, to: string) =>
-    db.prepare("UPDATE agent_proposals SET status = ?, updated_at = ? WHERE id = ? AND owner = ? AND status = ?").bind(to, ts, id, owner, from).run();
+  const move = (from: "proposed" | "executing", to: string) =>
+    from === "executing"
+      ? // Only while the row is still our claim (claim timestamp as token, no quote linked yet).
+        db.prepare("UPDATE agent_proposals SET status = ?, updated_at = ? WHERE id = ? AND owner = ? AND status = 'executing' AND deposit_address IS NULL AND updated_at = ?").bind(to, ts, id, owner, ts).run()
+      : db.prepare("UPDATE agent_proposals SET status = ?, updated_at = ? WHERE id = ? AND owner = ? AND status = 'proposed'").bind(to, ts, id, owner).run();
   if (!claimed) {
     const cur = await db.prepare("SELECT status FROM agent_proposals WHERE id = ? AND owner = ?").bind(id, owner).first<{ status: string }>();
     if (!cur) throw new HttpError(404, "Proposal not found");
@@ -52,7 +55,7 @@ export async function approveProposal(deps: ApproveDeps, user: User, id: string,
     if (!policy) throw STALE;
     // Bill and invoice drafts do not depend on balances, and convert/sweep drafts not on bills or invoices.
     const money = p.type === "convert" || p.type === "sweep";
-    const input = await loadEvalInput(deps, user, policy, { balances: money, reminders: !money });
+    const input = await loadEvalInput(deps, user, policy, { balances: money, reminders: !money, excludeId: id });
     const d = evaluate(input).find((x) => x.dedupKey === p.dedupKey);
     if (!d || d.type !== p.type || !sameParams(d.params, p.params)) throw STALE;
     const x = p.params;
@@ -71,8 +74,9 @@ export async function approveProposal(deps: ApproveDeps, user: User, id: string,
         destinationAsset: entry.destinationAsset, recipientType: entry.recipientType, recipient: entry.recipient, slippageBps: 100,
       });
     } else {
-      const b = typeof body === "object" && body !== null ? body : {};
-      quote = await quoteBillPayment(deps, user, x.billId, { originAsset: b.originAsset as string });
+      const originAsset = typeof body === "object" && body !== null ? (body as { originAsset?: unknown }).originAsset : undefined;
+      if (typeof originAsset !== "string" || !originAsset) throw new HttpError(400, "Choose a token from your balance.");
+      quote = await quoteBillPayment(deps, user, x.billId, { originAsset });
     }
   } catch (e) {
     if (e === STALE) {
@@ -82,9 +86,13 @@ export async function approveProposal(deps: ApproveDeps, user: User, id: string,
     await move("executing", "proposed");
     throw e;
   }
-  await db
-    .prepare("UPDATE agent_proposals SET deposit_address = ?, updated_at = ? WHERE id = ? AND owner = ? AND status = 'executing'")
-    .bind(quote.depositAddress, ts, id, owner)
+  // Link only to OUR claim: the claim timestamp is the token. If this approval ran so long that it was released
+  // (STUCK_APPROVE_MS) and approved again, the row now belongs to the newer approval: refuse and do not hand out
+  // this quote (it stays unsigned and expires; it never moved funds).
+  const link = await db
+    .prepare("UPDATE agent_proposals SET deposit_address = ?, updated_at = ? WHERE id = ? AND owner = ? AND status = 'executing' AND deposit_address IS NULL AND updated_at = ?")
+    .bind(quote.depositAddress, ts, id, owner, ts)
     .run();
+  if (link.meta.changes !== 1) throw new HttpError(409, OUT_OF_DATE);
   return quote;
 }

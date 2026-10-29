@@ -7,10 +7,15 @@ export type NearRpc = {
 
 const NOT_FOUND = new Set(["UNKNOWN_ACCESS_KEY", "UNKNOWN_ACCOUNT"]);
 
+/** A hung RPC must not stall a request (an approval holds its proposal while it runs). */
+export const RPC_TIMEOUT_MS = 15_000;
+
 export function createNearRpc(url: string, fetchFn: typeof fetch): NearRpc {
   async function query(params: Record<string, unknown>): Promise<{ notFound: true } | { result: Record<string, unknown> }> {
+    // Called bare (fetchFn is a local): workerd's fetch throws "Illegal invocation" when called as a method.
     const res = await fetchFn(url, {
       method: "POST",
+      signal: AbortSignal.timeout(RPC_TIMEOUT_MS),
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ jsonrpc: "2.0", id: "manexus", method: "query", params: { ...params } }),
     });

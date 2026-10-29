@@ -537,7 +537,9 @@ export async function refreshTransfer(deps: TransferDeps, user: User, depositAdd
  * `refreshTransfer` for a row the caller already loaded (owner-scoped): at most one query, and the row as
  * stored afterwards. A failed check records `checkedAttemptAt` in upstream and leaves updated_at alone.
  */
-export async function refreshRow(deps: TransferDeps, user: User, row: TransferRow): Promise<{ view: TransferView; row: TransferRow }> {
+export async function refreshRow(
+  deps: { db: Db; oneclick: Pick<OneClick, "status">; now: Date }, user: User, row: TransferRow,
+): Promise<{ view: TransferView; row: TransferRow }> {
   const { db, oneclick, now } = deps;
   if (row.owner !== user.account) throw new HttpError(404, "Transfer not found");
   if (!stale(row, now)) return { view: toView(row, now), row };
