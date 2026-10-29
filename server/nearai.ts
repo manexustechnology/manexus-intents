@@ -199,6 +199,8 @@ export async function draftPolicy(ai: NearAi, _user: User, text: string, ctx: Dr
 /** Numbers and token symbols only: never a vendor, client, payee, note, invoice number, address or id. */
 export type SummaryFacts = {
   balances: { symbol: string; amount: string; usd?: string }[];
+  /** Set when the balance read failed: `balances` is then empty, not zero, and the summary is not cached. */
+  balancesUnavailable?: true;
   receivables: { symbol: string; total: string; count: number; overdue: number }[];
   payables: { symbol: string; total: string; count: number; overdue: number }[];
   proposals: Record<string, number>;
@@ -222,7 +224,7 @@ export async function gatherFacts(deps: FactDeps, user: User): Promise<SummaryFa
   };
   const balances = await getBalances(deps, user.account).then(
     (bs) => bs.map((b) => ({ symbol: b.symbol, amount: b.formatted, ...(b.usd ? { usd: b.usd } : {}) })),
-    () => [],
+    () => null,
   );
   const today = deps.now.toISOString().slice(0, 10);
   const group = (rows: { tokenId: string; amount: string; due: string }[]) => {
@@ -246,7 +248,8 @@ export async function gatherFacts(deps: FactDeps, user: User): Promise<SummaryFa
     .all<{ type: string; n: number }>();
   const month = await monthSummary(deps, user);
   return {
-    balances,
+    balances: balances ?? [],
+    ...(balances ? {} : { balancesUnavailable: true as const }),
     receivables: group(invoices.map((i) => ({ tokenId: i.tokenId, amount: i.total, due: i.data.dueDate }))),
     payables: group(bills.map((b) => ({ tokenId: b.destinationAsset, amount: b.amount, due: b.dueDate }))),
     proposals: Object.fromEntries(results.map((r) => [r.type, r.n])),
@@ -258,7 +261,7 @@ export async function summarize(ai: NearAi, facts: SummaryFacts): Promise<{ text
   requireConfigured(ai);
   const reply = await ai.chat(
     [
-      { role: "system", content: "You write a short plain-text summary (2 to 4 sentences, no markdown, no lists) of a business treasury from the JSON facts the user sends: balances, money owed to the business (receivables), bills the business owes (payables), open agent suggestions by type, and this month's totals. Use only the facts given and never invent numbers. Do not give instructions or advice about moving funds." },
+      { role: "system", content: "You write a short plain-text summary (2 to 4 sentences, no markdown, no lists) of a business treasury from the JSON facts the user sends: balances, money owed to the business (receivables), bills the business owes (payables), open agent suggestions by type, and this month's totals. If balancesUnavailable is true the balances could not be read right now: say so and do not describe them as zero. Use only the facts given and never invent numbers. Do not give instructions or advice about moving funds." },
       { role: "user", content: JSON.stringify(facts) },
     ],
     SUMMARY_MAX_TOKENS,
@@ -266,7 +269,7 @@ export async function summarize(ai: NearAi, facts: SummaryFacts): Promise<{ text
   return { text: reply.trim().slice(0, MAX_SUMMARY) };
 }
 
-/** The owner's summary, cached 10 minutes in `agent_cache`. A cache hit makes no AI call. */
+/** The owner's summary, cached 10 minutes in `agent_cache` (unless balances could not be read). A cache hit makes no AI call. */
 export async function getSummary(
   deps: FactDeps & { ai: NearAi }, user: User, opts: { refresh?: boolean } = {},
 ): Promise<{ text: string; at: string }> {
@@ -276,8 +279,11 @@ export async function getSummary(
     const age = deps.now.getTime() - Date.parse(row.summary_at);
     if (age >= 0 && age < (opts.refresh ? REFRESH_MIN_MS : SUMMARY_TTL_MS)) return { text: row.summary, at: row.summary_at };
   }
-  const { text } = await summarize(deps.ai, await gatherFacts(deps, user));
+  const facts = await gatherFacts(deps, user);
+  const { text } = await summarize(deps.ai, facts);
   const at = deps.now.toISOString();
+  // A summary written without balances is shown once and not cached, so the next view retries the read.
+  if (facts.balancesUnavailable) return { text, at };
   await deps.db
     .prepare("INSERT INTO agent_cache (owner, summary, summary_at) VALUES (?, ?, ?) ON CONFLICT(owner) DO UPDATE SET summary = excluded.summary, summary_at = excluded.summary_at")
     .bind(user.account, text, at)

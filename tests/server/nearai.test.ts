@@ -302,3 +302,25 @@ test("draft: prompt carries the owner's current policy, says omitted sections ar
     assert.ok(!calls[0].body.messages[0].content.includes("wrap.near"));
   });
 });
+
+test("summary: balances unavailable is told to the model and the summary is not cached", async () => {
+  const db = createTestDb();
+  const env = envWith({ NEAR_RPC_URL: "https://rpc-down.test/" }, db);
+  await withUpstream(() => reply("Balances could not be read."), async (calls) => {
+    assert.equal((await summary(env)).status, 200);
+    const facts = JSON.parse(calls[0].body.messages[1].content);
+    assert.equal(facts.balancesUnavailable, true);
+    assert.deepEqual(facts.balances, []);
+    assert.ok(calls[0].body.messages[0].content.includes("balancesUnavailable"));
+    const row = await db.prepare("SELECT summary FROM agent_cache WHERE owner = ?").bind(ALICE).first<{ summary: string | null }>();
+    assert.equal(row?.summary ?? null, null);
+    // Not cached: the next request asks again (and caches once balances read).
+    assert.equal((await summary(env)).status, 200);
+    assert.equal(calls.length, 2);
+    assert.equal((await summary(envWith({}, db))).status, 200);
+    assert.equal(calls.length, 3);
+    assert.equal(JSON.parse(calls[2].body.messages[1].content).balancesUnavailable, undefined);
+    assert.equal((await summary(envWith({}, db))).status, 200);
+    assert.equal(calls.length, 3);
+  });
+});
