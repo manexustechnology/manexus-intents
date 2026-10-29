@@ -28,7 +28,7 @@ Every outbound transfer (withdraw, swap, bill, payroll line) goes through one en
 - **Cash**: every token in the Intents balance with a USD total at reference prices.
 - **Receivables**: issued, unpaid invoices per token, with the overdue count.
 - **Payables**: scheduled bills due in the next 14 days per token, with the overdue count.
-- **This month**: received (verified invoice payments) and sent (successful withdrawals, bill payments and payroll lines; a swap stays in your account and is not counted). For bills and payroll, sent is what left the balance: the quote's amount in, less any unused slippage buffer 1Click reports as refunded; when 1Click reports no refund amount the figure includes the buffer per settlement token (USDC, USDT), summed in integer base units and never mixed across tokens.
+- **This month**: received (verified invoice payments) and sent (successful withdrawals, bill payments and payroll lines; a swap stays in your account and is not counted) per settlement token (USDC, USDT), summed in integer base units and never mixed across tokens. Sent is what left the balance: for bills and payroll the quote's amount in, less any unused slippage buffer 1Click reports as refunded; when 1Click reports no refund amount, sent includes that buffer.
 - **Activity**: invoice payments (including extra payments), withdrawals, swaps, bill payments and payroll lines, newest first, each linking to its invoice, bill or payout. Unsigned quotes moved no funds and are not listed.
 
 Each tile loads on its own; one failing request does not blank the others.
@@ -167,7 +167,11 @@ c826e55 chore: drop unneeded @types/node from functions typecheck
 Later Plan 1 commits (hardening, E2E test, docs, CSP) follow these. Plan 2, the treasury features ([plan](docs/superpowers/plans/2026-10-30-plan2-treasury-features.md)), is also hackathon work:
 
 ```
-docs: treasury features README and end-to-end test   (this commit: navigation, README, docs/INVOICING.md, treasury E2E)
+1a76618 fix: measure the failed-relay grace from the later of intent and quote deadlines
+b183196 fix: refreshInvoice checks at most 10 attempts per call, stalest first
+228ea45 fix: this month's sent excludes the slippage buffer 1Click refunded
+7aa6f00 fix: payroll batch view and payee import fit D1's per-request query limit
+f26c727 docs: treasury features README and end-to-end test
 9dcf641 fix: swap, transfer and payroll follow-ups from review
 fd24455 feat: payroll and batch payouts from CSV or saved payees
 ff730c1 fix: bills reschedule a failed relay only after a real post-grace 1Click check
@@ -180,7 +184,7 @@ fb50d2b refactor: move server/withdraw.ts to server/transfers.ts
 ace6241 docs: Plan 2 treasury features (swap, dashboard, bill pay, payroll)
 ```
 
-Run `git log --oneline 7d827b1..HEAD` for the full list.
+The commit that updates this list follows these. Run `git log --oneline 7d827b1..HEAD` for the full list.
 
 ## Deploy (maintainer)
 
