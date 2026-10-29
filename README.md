@@ -44,8 +44,8 @@ npm run dev:api               # terminal 2: wrangler Pages on http://localhost:2
 ```sh
 npm test            # node:test unit and server tests
 npm run typecheck   # app and functions
-npm run build       # typecheck + vite build
-npm run build        # then, in a second terminal:
+npm run build       # typecheck + vite build (needed before preview)
+# then, in a second terminal:
 npx vite preview --port 24012   # stop it with Ctrl+C when done
 # back in the first terminal (mocked /api, desktop and mobile projects):
 PLAYWRIGHT_BASE_URL=http://127.0.0.1:24012 npm run test:e2e -- --workers=1
