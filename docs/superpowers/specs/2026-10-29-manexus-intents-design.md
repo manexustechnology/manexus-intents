@@ -42,3 +42,10 @@ Illustrative price calculator, local swap simulation, tokenized-asset concept ga
 
 - NEAR Intents suffered a ~$3.8M exploit on 2026-10-01 (postmortem public). App copy must not overstate safety; amounts in demo are small.
 - 1Click behaviour for `recipientType: INTENTS` with EVM account ids, the ERC-191 `standard` literal and NEP-413 public-key registration on `intents.near` are verified in Plan 1 Task 0 before dependent code is written.
+
+## Plan 2 decisions (2026-10-30)
+
+- Order: Swap → Treasury dashboard → Bill pay → Payroll. Plan: `docs/superpowers/plans/2026-10-30-plan2-treasury-features.md`.
+- All outbound money movement (withdraw, swap, bill, payroll) uses one transfer engine: 1Click quote → generated intent → owner signs → server relays the exact stored payload.
+- Bill pay: paste a Manexus invoice link (paid into the vendor's Intents account and reconciled on the vendor invoice) or enter a manual address on any supported chain. Bills and payroll pay the exact recipient amount (`EXACT_OUTPUT`).
+- Payroll: CSV upload or saved payees; one signed intent per line, signed sequentially; at most 50 lines per batch.
