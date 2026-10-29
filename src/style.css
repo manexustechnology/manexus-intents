@@ -110,6 +110,42 @@ aside {
   font-size: 8px;
   color: #69844b;
 }
+/* Mobile-only "More" entry and its menu (Payroll, Withdraw, Sign out). */
+.nav-more,
+.more-menu {
+  display: none;
+}
+button.nav,
+.more-item {
+  font: inherit;
+  cursor: pointer;
+}
+.more-menu[hidden] {
+  display: none !important;
+}
+.more-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 12px 14px;
+  border-radius: 9px;
+  background: transparent;
+  color: #284b32;
+  font-size: 14px;
+  font-weight: 600;
+  text-align: left;
+  text-decoration: none;
+}
+.more-item > span {
+  width: 20px;
+  font-size: 18px;
+  text-align: center;
+}
+.more-item.active,
+.more-item:hover {
+  background: #eaf3e6;
+}
 .sidebottom {
   margin-top: auto;
   font-size: 11px;
@@ -1254,6 +1290,27 @@ dd {
 @media (max-width: 760px) {
   nav {
     grid-template-columns: repeat(5, 1fr);
+  }
+  .nav-secondary {
+    display: none;
+  }
+  .nav-more {
+    display: flex;
+  }
+  .more-menu {
+    display: flex;
+    flex-direction: column;
+    position: fixed;
+    right: 8px;
+    bottom: 80px;
+    z-index: 20;
+    min-width: 190px;
+    max-width: calc(100vw - 16px);
+    padding: 6px;
+    background: #fff;
+    border: 1px solid #dde6db;
+    border-radius: 12px;
+    box-shadow: 0 12px 32px rgba(23, 63, 53, 0.16);
   }
   .nav {
     font-size: 8px;

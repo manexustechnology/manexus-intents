@@ -42,17 +42,24 @@ test("private routes require sign-in; the pay page does not", async ({ page }) =
   await expect(page.getByRole("button", { name: "Connect EVM wallet" })).toHaveCount(0);
 });
 
-test("signed-in user sees the app shell with account chip", async ({ page }) => {
+test("signed-in user sees the app shell with account chip", async ({ page, isMobile }) => {
   await mockApi(page, () => ({ status: 200, json: { account: "alice.near", kind: "near" } }));
   await page.goto("/#/");
   await expect(page.locator(".account-chip")).toContainText("alice.near");
   await expect(page.getByRole("button", { name: "Connect NEAR wallet" })).toHaveCount(0);
   const nav = page.getByRole("navigation", { name: "Main navigation" });
-  for (const name of ["Home", "Invoices", "Withdraw"]) await expect(nav.getByRole("link", { name })).toBeVisible();
+  for (const name of ["Home", "Invoices", "Bills", "Swap"]) await expect(nav.getByRole("link", { name })).toBeVisible();
+  // Desktop sidebar lists everything; the mobile bar keeps Payroll and Withdraw under More.
+  if (isMobile) {
+    await expect(nav.getByRole("link", { name: "Withdraw" })).toHaveCount(0);
+    await nav.getByRole("button", { name: "More" }).click();
+  } else await expect(nav.getByRole("button", { name: "More" })).toHaveCount(0);
+  for (const name of ["Payroll", "Withdraw"]) await expect(nav.getByRole("link", { name })).toBeVisible();
   await nav.getByRole("link", { name: "Withdraw" }).click();
   await expect(page).toHaveURL(/#\/withdraw$/);
   await expect(page.getByRole("heading", { name: "Withdraw" })).toBeVisible();
-  await expect(nav.getByRole("link", { name: "Withdraw" })).toHaveAttribute("aria-current", "page");
+  await expect(nav.locator('a[aria-current="page"]').first()).toHaveAttribute("href", "#/withdraw");
+  if (isMobile) await expect(nav.getByRole("button", { name: "More" })).toHaveClass(/active/);
 });
 
 test("EVM sign-in with an injected wallet, then sign out", async ({ page }) => {
