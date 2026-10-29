@@ -410,6 +410,15 @@ export async function submitTransfer(deps: TransferDeps, user: User, body: { dep
   if (!sameSigner(user, intentBody(s.standard, s.payload)?.signer_id)) throw new HttpError(403, "Signed intent is not for your account");
   const sig = signatureFields(s.standard, sd);
   const signedData = { standard: s.standard, payload: s.payload, ...sig };
+  // A Manexus bill pays a vendor invoice: refuse to relay once the vendor cancelled it or it was paid
+  // since the quote (a payment that lands anyway is reconciled on the vendor side as duplicate/after_cancel).
+  if (row.kind === "bill" && row.bill_id != null) {
+    const b = await db
+      .prepare("SELECT b.source AS source, i.status AS invoice_status FROM bills b LEFT JOIN invoices i ON i.public_id = b.vendor_public_id WHERE b.id = ? AND b.owner = ?")
+      .bind(row.bill_id, user.account)
+      .first<{ source: string; invoice_status: string | null }>();
+    if (b && b.source === "manexus" && b.invoice_status !== "issued") throw new HttpError(409, "The vendor invoice is no longer payable");
+  }
 
   const ts = now.toISOString();
   const claim = await db

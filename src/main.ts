@@ -1,6 +1,8 @@
 import "./style.css";
 import { escapeHTML as esc } from "../shared/text.ts";
 import { api, ApiError } from "./api.ts";
+import { mountBill } from "./views/bill-detail.ts";
+import { mountBills, mountNewBill } from "./views/bills.ts";
 import { mountHome } from "./views/home.ts";
 import { mountInvoice } from "./views/invoice-detail.ts";
 import { mountInvoices } from "./views/invoices.ts";
@@ -23,6 +25,9 @@ const ROUTES: { pattern: RegExp; name: string; keys: string[]; public?: boolean;
   { pattern: /^\/?$/, name: "home", keys: [], nav: "home", title: "Home" },
   { pattern: /^\/invoices\/?$/, name: "invoices", keys: [], nav: "invoices", title: "Invoices" },
   { pattern: /^\/invoices\/([^/]+)\/?$/, name: "invoice", keys: ["id"], nav: "invoices", title: "Invoice" },
+  { pattern: /^\/bills\/?$/, name: "bills", keys: [], nav: "bills", title: "Bills" },
+  { pattern: /^\/bills\/new\/?$/, name: "bill-new", keys: [], nav: "bills", title: "New bill" },
+  { pattern: /^\/bills\/([^/]+)\/?$/, name: "bill", keys: ["id"], nav: "bills", title: "Bill" },
   { pattern: /^\/swap\/?$/, name: "swap", keys: [], nav: "swap", title: "Swap" },
   { pattern: /^\/withdraw\/?$/, name: "withdraw", keys: [], nav: "withdraw", title: "Withdraw" },
   { pattern: /^\/pay\/([^/]+)\/?$/, name: "pay", keys: ["publicId"], public: true, nav: "", title: "Pay invoice" },
@@ -49,6 +54,9 @@ export function parseRoute(hash: string): Route | null {
 registerView("home", mountHome);
 registerView("invoices", mountInvoices);
 registerView("invoice", mountInvoice);
+registerView("bills", mountBills);
+registerView("bill-new", mountNewBill);
+registerView("bill", mountBill);
 registerView("swap", mountSwap);
 registerView("withdraw", mountWithdraw);
 registerView("pay", mountPay);
@@ -56,6 +64,7 @@ registerView("pay", mountPay);
 const NAV: [string, string, string, string][] = [
   ["home", "#/", "◫", "Home"],
   ["invoices", "#/invoices", "▤", "Invoices"],
+  ["bills", "#/bills", "▥", "Bills"],
   ["swap", "#/swap", "⇄", "Swap"],
   ["withdraw", "#/withdraw", "↗", "Withdraw"],
 ];

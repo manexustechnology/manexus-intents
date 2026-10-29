@@ -1500,3 +1500,45 @@ a.secondary { display: inline-flex; align-items: center; padding: 0 16px; min-he
 .activity-row small { display: block; color: #819086; }
 .activity-icon { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 50%; background: #eef3ef; }
 .activity-amount { font-variant-numeric: tabular-nums; }
+
+/* Bills */
+.tabs {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 18px;
+  border-bottom: 1px solid #e3ebe0;
+}
+.tabs [role="tab"] {
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  padding: 10px 12px;
+  font: inherit;
+  font-weight: 600;
+  color: #5f6f65;
+  cursor: pointer;
+}
+.tabs [role="tab"][aria-selected="true"] {
+  color: #173d2c;
+  border-bottom-color: #2f6b3c;
+}
+.badge.status-due,
+.badge.status-bill-scheduled {
+  color: #2f6b3c;
+  border-color: #b9d6a5;
+  background: #eff6e7;
+}
+.badge.status-bill-paying {
+  color: #6b4f12;
+  border-color: #e3cf96;
+  background: #fbf5e3;
+}
+.badge.status-bill-paid {
+  color: #fff;
+  border-color: #2f6b3c;
+  background: #2f6b3c;
+}
+.badge.status-bill-cancelled {
+  color: #7a7a7a;
+}

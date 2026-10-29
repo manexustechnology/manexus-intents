@@ -1,8 +1,9 @@
 import type { Db } from "./db.ts";
 import { HttpError } from "./http.ts";
 import { getInvoiceByPublicId } from "./invoices.ts";
-import type { OneClickToken, QuoteRequest, createOneClick } from "./oneclick.ts";
-import { validDestination } from "../shared/address.ts";
+import type { OneClickToken, Quote, QuoteRequest, createOneClick } from "./oneclick.ts";
+import { validDestination, validIntentsAccount } from "../shared/address.ts";
+import type { InvoiceRow } from "../shared/invoice.ts";
 import { formatAmount } from "../shared/units.ts";
 
 /**
@@ -104,41 +105,51 @@ type Deps = { db: Db; oneclick: Pick<ReturnType<typeof createOneClick>, "tokens"
 const MAX_ATTEMPTS = 20;
 const QUOTE_MINUTES = 30;
 const notPayable = () => new HttpError(409, "This invoice is not payable");
+const badQuote = () => new HttpError(502, "NEAR Intents returned an unexpected response");
 
-export async function createPaymentQuote(
-  deps: Deps,
-  publicId: string,
-  body: { originAsset: string; refundTo: string },
-): Promise<PaymentAttemptView> {
-  const { db, oneclick, now } = deps;
+/** The invoice row, if it can still be paid (issued, positive total). */
+async function payableInvoice(db: Db, publicId: string): Promise<InvoiceRow> {
   const inv = await getInvoiceByPublicId(db, publicId);
   if (inv.status !== "issued" || !/^[1-9][0-9]*$/.test(inv.total)) throw notPayable();
-  if (typeof body?.originAsset !== "string" || typeof body?.refundTo !== "string") throw new HttpError(400, "Choose a token and enter a refund address.");
+  return inv;
+}
 
-  const count = await db.prepare("SELECT COUNT(*) AS n FROM payment_attempts WHERE invoice_id = ?").bind(inv.id).first<{ n: number }>();
+async function checkAttemptLimit(db: Db, invoiceId: string): Promise<void> {
+  const count = await db.prepare("SELECT COUNT(*) AS n FROM payment_attempts WHERE invoice_id = ?").bind(invoiceId).first<{ n: number }>();
   if ((count?.n ?? 0) >= MAX_ATTEMPTS) throw new HttpError(429, "Too many payment attempts for this invoice. Try again later.");
+}
 
-  const token: OneClickToken | undefined = (await oneclick.tokens()).find((t) => t.assetId === body.originAsset);
-  if (!token) throw new HttpError(400, "That token is not supported.");
-  const refundTo = body.refundTo.trim();
-  if (!validDestination(token.blockchain, refundTo)) throw new HttpError(400, `Enter a valid ${token.blockchain} refund address.`);
+/** Slippage of every invoice payment quote, in basis points. */
+export const INVOICE_SLIPPAGE_BPS = 100;
 
-  const request: QuoteRequest = {
+/**
+ * The one quote request that pays an invoice: EXACT_OUTPUT of the invoice total in the invoice token into
+ * the owner's Intents account (what `decideOutcome` checks). Only where the payer's funds come from and
+ * where a refund goes differ between a payer depositing on a chain and a payer paying from Intents.
+ */
+export function invoiceQuoteRequest(
+  inv: InvoiceRow,
+  from: { originAsset: string; source: "ORIGIN_CHAIN" | "INTENTS"; refundTo: string },
+  now: Date,
+): QuoteRequest {
+  return {
     dry: false,
     swapType: "EXACT_OUTPUT",
-    slippageTolerance: 100,
-    originAsset: token.assetId,
-    depositType: "ORIGIN_CHAIN",
+    slippageTolerance: INVOICE_SLIPPAGE_BPS,
+    originAsset: from.originAsset,
+    depositType: from.source,
     destinationAsset: inv.tokenId,
     amount: inv.total,
-    refundTo,
-    refundType: "ORIGIN_CHAIN",
+    refundTo: from.refundTo,
+    refundType: from.source,
     recipient: inv.owner,
     recipientType: "INTENTS",
     deadline: new Date(now.getTime() + QUOTE_MINUTES * 60_000).toISOString(),
     referral: "manexus",
   };
-  const q = await oneclick.quote(request);
+}
+
+function checkInvoiceQuote(inv: InvoiceRow, q: Quote): void {
   if (
     !q.depositAddress ||
     !/^[0-9]+$/.test(q.amountIn) ||
@@ -146,16 +157,73 @@ export async function createPaymentQuote(
     BigInt(q.amountOut) < BigInt(inv.total) ||
     Number.isNaN(new Date(q.deadline).getTime())
   )
-    throw new HttpError(502, "NEAR Intents returned an unexpected response");
+    throw badQuote();
+}
 
-  const row: AttemptRow = {
+function attemptFor(inv: InvoiceRow, q: Quote, originAsset: string, refundTo: string, now: Date): AttemptRow {
+  return {
     depositAddress: q.depositAddress,
     ...(q.depositMemo ? { depositMemo: q.depositMemo } : {}),
-    invoiceId: inv.id, originAsset: token.assetId, amountIn: q.amountIn, refundTo, deadline: q.deadline, status: "PENDING_DEPOSIT",
+    invoiceId: inv.id, originAsset, amountIn: q.amountIn, refundTo, deadline: q.deadline, status: "PENDING_DEPOSIT",
     createdAt: now.toISOString(), updatedAt: now.toISOString(),
   };
+}
+
+export async function createPaymentQuote(
+  deps: Deps,
+  publicId: string,
+  body: { originAsset: string; refundTo: string },
+): Promise<PaymentAttemptView> {
+  const { db, oneclick, now } = deps;
+  const inv = await payableInvoice(db, publicId);
+  if (typeof body?.originAsset !== "string" || typeof body?.refundTo !== "string") throw new HttpError(400, "Choose a token and enter a refund address.");
+  await checkAttemptLimit(db, inv.id);
+
+  const token: OneClickToken | undefined = (await oneclick.tokens()).find((t) => t.assetId === body.originAsset);
+  if (!token) throw new HttpError(400, "That token is not supported.");
+  const refundTo = body.refundTo.trim();
+  if (!validDestination(token.blockchain, refundTo)) throw new HttpError(400, `Enter a valid ${token.blockchain} refund address.`);
+
+  const q = await oneclick.quote(invoiceQuoteRequest(inv, { originAsset: token.assetId, source: "ORIGIN_CHAIN", refundTo }, now));
+  checkInvoiceQuote(inv, q);
+  const row = attemptFor(inv, q, token.assetId, refundTo, now);
   await saveAttempt(db, row);
   return toAttemptView(row, now, token);
+}
+
+/**
+ * Pay an invoice from the payer's own NEAR Intents balance (a Manexus bill). Quotes the same request as
+ * `createPaymentQuote` with depositType/refundType INTENTS and refunds to the payer's Intents account,
+ * stores the payment attempt on the invoice (so the vendor's reconciliation sees the payment), then hands
+ * the quote to `prepare` (which stores the payer's transfer). If `prepare` fails, the attempt is deleted:
+ * nothing was deposited into it yet.
+ */
+export async function createIntentsPaymentQuote<T>(
+  deps: { db: Db; oneclick: Pick<ReturnType<typeof createOneClick>, "quote">; now: Date },
+  publicId: string,
+  body: { originAsset: string; payer: string },
+  prepare: (q: Quote, inv: InvoiceRow, request: QuoteRequest) => Promise<T>,
+): Promise<T> {
+  const { db, oneclick, now } = deps;
+  const inv = await payableInvoice(db, publicId);
+  if (typeof body?.originAsset !== "string" || !body.originAsset || body.originAsset.length > 200) throw new HttpError(400, "Choose a token from your balance.");
+  if (typeof body.payer !== "string" || !validIntentsAccount(body.payer)) throw new HttpError(400, "Enter a valid NEAR account or lowercase 0x address.");
+  if (body.payer === inv.owner) throw new HttpError(400, "This is your own invoice");
+  await checkAttemptLimit(db, inv.id);
+
+  const request = invoiceQuoteRequest(inv, { originAsset: body.originAsset, source: "INTENTS", refundTo: body.payer }, now);
+  const q = await oneclick.quote(request);
+  checkInvoiceQuote(inv, q);
+  // Never let the cleanup below touch an attempt that existed before this request.
+  if (await db.prepare("SELECT 1 AS x FROM payment_attempts WHERE deposit_address = ?").bind(q.depositAddress).first())
+    throw new HttpError(502, "NEAR Intents returned a deposit address that is already in use");
+  await saveAttempt(db, attemptFor(inv, q, body.originAsset, body.payer, now));
+  try {
+    return await prepare(q, inv, request);
+  } catch (e) {
+    await db.prepare("DELETE FROM payment_attempts WHERE deposit_address = ? AND invoice_id = ? AND outcome IS NULL").bind(q.depositAddress, inv.id).run();
+    throw e;
+  }
 }
 
 export async function submitDepositTx(deps: Deps, publicId: string, body: { depositAddress: string; txHash: string }): Promise<void> {

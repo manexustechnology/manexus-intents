@@ -76,6 +76,14 @@ test("month summary sums bigint per token for the current UTC month only", async
   assert.deepEqual([s.tokens.find((t) => t.symbol === "USDT")!.received, s.tokens.find((t) => t.symbol === "USDT")!.sent], ["0", "0"]);
 });
 
+test("month summary: a swap is an internal move, not money sent", async () => {
+  const db = createTestDb();
+  await transfer(db, "s1", "alice.near", "swap", "SUCCESS", USDC, "700000", "2030-03-05T00:00:00.000Z");
+  await transfer(db, "w1", "alice.near", "withdraw", "SUCCESS", USDC, "200000", "2030-03-05T00:00:00.000Z");
+  const usdc = (await monthSummary({ db, now: NOW }, ALICE)).tokens.find((t) => t.symbol === "USDC")!;
+  assert.equal(usdc.sent, "200000");
+});
+
 test("GET /api/activity requires a session and serves feed and summary", async () => {
   const db = await seeded();
   const env = { DB: db, SESSION_SECRET: SECRET } as never;

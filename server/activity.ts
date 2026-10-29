@@ -26,7 +26,8 @@ function clamp(limit: number): number {
   return Number.isInteger(limit) ? Math.min(100, Math.max(1, limit)) : 50;
 }
 
-const HREF: Record<TransferKind, string> = { withdraw: "#/withdraw", swap: "#/swap", bill: "#/", payroll: "#/" };
+const HREF: Record<TransferKind, string> = { withdraw: "#/withdraw", swap: "#/swap", bill: "#/bills", payroll: "#/" };
+const hrefOf = (t: { kind: TransferKind; billId?: string }) => (t.kind === "bill" && t.billId ? `#/bills/${encodeURIComponent(t.billId)}` : HREF[t.kind]);
 
 export async function listActivity(deps: Deps, user: User, limit = 50): Promise<ActivityItem[]> {
   const n = clamp(limit);
@@ -53,7 +54,7 @@ export async function listActivity(deps: Deps, user: User, limit = 50): Promise<
   for (const t of await listTransfers(deps, user, undefined, n)) {
     const title =
       t.kind === "withdraw" ? `Withdrawal to ${t.destinationBlockchain}` : t.kind === "swap" ? `Swap ${t.originSymbol} → ${t.destinationSymbol}` : t.kind === "bill" ? "Bill payment" : "Payroll";
-    items.push({ at: t.createdAt, type: t.kind, title, amountFormatted: t.amountFormatted, symbol: t.originSymbol, status: t.status, href: HREF[t.kind] });
+    items.push({ at: t.createdAt, type: t.kind, title, amountFormatted: t.amountFormatted, symbol: t.originSymbol, status: t.status, href: hrefOf(t) });
   }
   return items.sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0)).slice(0, n);
 }
@@ -77,8 +78,9 @@ export async function monthSummary(deps: Deps, user: User): Promise<MonthSummary
     .bind(user.account, from, to)
     .all<{ token: string; amount: string | null }>();
   for (const r of a.results) add(recv, r.token, r.amount);
+  // A swap stays in the owner's own Intents account: an internal move, not money sent.
   const s = await deps.db
-    .prepare(`SELECT origin_asset AS token, amount FROM withdrawals WHERE owner = ? AND status = 'SUCCESS' AND updated_at >= ? AND updated_at < ?`)
+    .prepare(`SELECT origin_asset AS token, amount FROM withdrawals WHERE owner = ? AND status = 'SUCCESS' AND kind != 'swap' AND updated_at >= ? AND updated_at < ?`)
     .bind(user.account, from, to)
     .all<{ token: string; amount: string }>();
   for (const r of s.results) add(sent, r.token, r.amount);

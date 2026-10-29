@@ -8,7 +8,13 @@ const feed = [
 ];
 const month = { month: "2030-03", tokens: [{ tokenId: USDC, symbol: "USDC", received: "3500000", sent: "400000", receivedFormatted: "3.5", sentFormatted: "0.4" }, { tokenId: "x", symbol: "USDT", received: "0", sent: "0", receivedFormatted: "0", sentFormatted: "0" }] };
 
-async function mock(page: Page, failing: string[] = []) {
+const day = (n: number) => new Date(Date.now() + n * 86_400_000).toISOString().slice(0, 10);
+const bill = (id: string, dueDate: string, amount: string, over: Record<string, unknown> = {}) => ({
+  id, vendor: `V ${id}`, reference: "", dueDate, destinationAsset: USDC, recipientType: "INTENTS", recipient: "v.near", amount, amountFormatted: "", symbol: "USDC",
+  blockchain: "near", decimals: 6, source: "manual", status: "scheduled", overdue: false, createdAt: "t", updatedAt: "t", ...over,
+});
+
+async function mock(page: Page, failing: string[] = [], bills: unknown[] = []) {
   const calls: string[] = [];
   await page.route(/^(?!http:\/\/(127\.0\.0\.1|localhost)[:/]).*/, (r) => r.abort());
   await page.route("**/api/**", (r) => {
@@ -18,6 +24,7 @@ async function mock(page: Page, failing: string[] = []) {
     if (u.pathname === "/api/me") return r.fulfill({ json: { account: "alice.near", kind: "near" } });
     if (u.pathname === "/api/balances") return r.fulfill({ json: bal });
     if (u.pathname === "/api/invoices") return r.fulfill({ json: [] });
+    if (u.pathname === "/api/bills") return r.fulfill({ json: bills });
     if (u.pathname === "/api/activity") return r.fulfill({ json: u.searchParams.get("summary") ? month : feed });
     return r.fulfill({ status: 404, json: { error: "Not found" } });
   });
@@ -29,7 +36,7 @@ test("dashboard tiles, escaped activity feed and links", async ({ page }) => {
   await page.goto("/#/");
   await expect(page.locator("#home-total")).toContainText("$2.50");
   await expect(page.locator("#home-pay")).toContainText("No bills yet");
-  expect(calls.some((c) => c.startsWith("/api/bills"))).toBe(false);
+  expect(calls).toContain("/api/bills?status=scheduled");
   await expect(page.locator("#home-month")).toContainText("received 3.5");
   await expect(page.locator("#home-month")).toContainText("sent 0.4");
   await expect(page.locator("#home-month")).not.toContainText("USDT");
@@ -55,4 +62,22 @@ test("a month failure leaves the feed visible", async ({ page }) => {
   await page.goto("/#/");
   await expect(page.locator("#home-month")).toContainText("Upstream down");
   await expect(page.locator("#home-activity")).toContainText("Withdrawal to sol");
+});
+
+test("payables: scheduled bills due within 14 days per token, with the overdue count", async ({ page }) => {
+  await mock(page, [], [
+    bill("a", day(3), "1500000"),
+    bill("b", day(-2), "250000"),
+    bill("c", day(40), "9000000"),
+    bill("d", day(1), "1", { destinationAsset: "nep141:wrap.near", symbol: "wNEAR", decimals: 24 }),
+  ]);
+  await page.goto("/#/");
+  await expect(page.locator("#home-pay")).toContainText("1.75 USDC + 0.000000000000000000000001 wNEAR");
+  await expect(page.locator("#home-pay")).toContainText("3 bills due in the next 14 days · 1 overdue");
+});
+
+test("payables: scheduled bills none of which are due soon", async ({ page }) => {
+  await mock(page, [], [bill("c", day(40), "9000000")]);
+  await page.goto("/#/");
+  await expect(page.locator("#home-pay")).toContainText("Nothing due in the next 14 days.");
 });
