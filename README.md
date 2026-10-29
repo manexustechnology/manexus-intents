@@ -118,6 +118,16 @@ npm run dev:api               # terminal 2: wrangler Pages on http://localhost:2
 
 `dev:api` proxies to port 24010, so set `PORT=24010` in `.env` (or edit the script). Open http://localhost:24011 so `/api` and the app share one origin. `ONECLICK_API_KEY` is optional locally. Live 1Click and NEAR mainnet are used even in local dev; there is no testnet.
 
+### AI features (optional, NEAR AI Cloud)
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `NEAR_AI_API_KEY` | unset (AI off) | Secret. Without it `POST /api/agent/policy/draft` and `GET /api/agent/summary` return 404 and the Agent page hides the AI controls. |
+| `NEAR_AI_MODEL` | `openai/gpt-6-luna` | Chat model. |
+| `NEAR_AI_BASE_URL` | `https://cloud-api.near.ai/v1` | OpenAI-compatible endpoint. |
+
+The model only drafts text: a rules draft is validated against your own whitelist and loaded into the Rules form, and is saved only after you sign it. The summary prompt carries totals and token symbols only (no names, notes or addresses) and is cached 10 minutes per owner.
+
 ## Tests
 
 ```sh
@@ -198,6 +208,8 @@ npx wrangler d1 migrations apply manexus-intents --remote
 # 3. Secrets and binding
 npx wrangler pages secret put SESSION_SECRET --project-name manexus-intents
 npx wrangler pages secret put ONECLICK_API_KEY --project-name manexus-intents
+# optional: enables AI rule drafting and the treasury summary (off without it)
+npx wrangler pages secret put NEAR_AI_API_KEY --project-name manexus-intents
 # bind the D1 database as DB in the Pages project settings
 # 4. Deploy
 npm run build

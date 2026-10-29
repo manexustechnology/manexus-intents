@@ -201,3 +201,51 @@ test("home shows the agent suggestions card; the agent page has no horizontal sc
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
   expect(overflow).toBeLessThanOrEqual(0);
 });
+
+test("AI not configured: describe box and summary are hidden, the rest of the page works", async ({ page }) => {
+  await setup(page); // /api/agent/ai-status is not mocked: 404
+  await page.goto("/#/agent");
+  await expect(page.locator("#ag-convert-min")).toHaveValue("10.00");
+  await expect(page.locator("#ag-ai-text")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Draft rules" })).toHaveCount(0);
+  await expect(page.locator("#ag-ai-summary")).toHaveText("AI features are not configured.");
+  await expect(page.locator("#ag-inbox .agent-reason")).toHaveCount(4);
+});
+
+test("AI draft fills the Rules form without saving; summary is escaped text", async ({ page }) => {
+  const calls = await setup(page);
+  const draft = { version: 1, convert: { enabled: true, targetTokenId: USDC, minUsdCents: 7500 }, reminders: { billDueDays: 5, invoiceOverdueDays: 9 } };
+  await page.route("**/api/agent/ai-status", (r) => r.fulfill({ json: { configured: true } }));
+  await page.route("**/api/agent/summary", (r) => r.fulfill({ json: { text: "You hold <b>600</b> USDC.", at: "t" } }));
+  await page.route("**/api/agent/policy/draft", (r) => r.fulfill({ json: { policy: draft, notes: "Converts above $75 <i>only</i>." } }));
+  await page.goto("/#/agent");
+  await expect(page.locator("#ag-ai-summary")).toContainText("You hold <b>600</b> USDC.");
+  await expect(page.locator("#ag-ai-summary b")).toHaveCount(0);
+  await page.locator("#ag-ai-text").fill("convert over 75 dollars");
+  await page.getByRole("button", { name: "Draft rules" }).click();
+  await expect(page.locator("#ag-convert-min")).toHaveValue("75.00");
+  await expect(page.locator("#ag-bill-days")).toHaveValue("5");
+  await expect(page.locator("#ag-ai-draft")).toContainText("Converts above $75 <i>only</i>. Review and sign to save.");
+  await expect(page.locator("#ag-ai-draft i")).toHaveCount(0);
+  expect(calls.some((c) => c.method === "PUT" || c.path === "/api/agent/policy/challenge")).toBe(false);
+  await page.getByRole("button", { name: "Save rules" }).click();
+  await expect(page.locator("#ag-sign-message")).toHaveText(MESSAGE);
+  expect(calls.find((c) => c.path === "/api/agent/policy/challenge")!.body).toMatchObject({ kind: "policy", policy: { convert: { minUsdCents: 7500 } } });
+  expect(calls.some((c) => c.method === "PUT")).toBe(false);
+});
+
+test("AI 503 (402/429/timeout) shows a message and the rest of the Agent page keeps working", async ({ page }) => {
+  await setup(page);
+  await page.route("**/api/agent/ai-status", (r) => r.fulfill({ json: { configured: true } }));
+  await page.route("**/api/agent/summary", (r) => r.fulfill({ status: 503, json: { error: "AI is unavailable right now" } }));
+  await page.route("**/api/agent/policy/draft", (r) => r.fulfill({ status: 503, json: { error: "AI is unavailable right now" } }));
+  await page.goto("/#/agent");
+  await expect(page.locator("#ag-ai-summary")).toHaveText("AI is unavailable right now");
+  await page.locator("#ag-ai-text").fill("anything");
+  await page.getByRole("button", { name: "Draft rules" }).click();
+  await expect(page.locator("#ag-ai-draft .error")).toHaveText("AI is unavailable right now");
+  await expect(page.locator("#ag-convert-min")).toHaveValue("10.00");
+  await expect(page.locator("#ag-inbox .agent-reason")).toHaveCount(4);
+  await page.locator('.ag-dismiss[data-proposal="p2"]').click();
+  await expect(page.locator("#ag-inbox .agent-reason")).toHaveCount(3);
+});

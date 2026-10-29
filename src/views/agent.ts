@@ -99,6 +99,12 @@ export function mountAgent(el: HTMLElement): () => void {
   let session: Session | null = null;
   let proposals: Proposal[] = [];
   let policy: Policy | null = null;
+  /** An AI draft shown in the Rules form for review. Never saved until the owner signs it like any other edit. */
+  let draft: Policy | null = null;
+  let aiConfigured = false;
+  let aiSummary: { text: string } | { error: string } | "loading" | null = null;
+  let draftState: { busy: boolean; error: string; notes: string } = { busy: false, error: "", notes: "" };
+  let draftText = "";
   let whitelist: WhitelistEntry[] = [];
   let balances: Balance[] = [];
   let tokens: Token[] = [];
@@ -122,15 +128,17 @@ export function mountAgent(el: HTMLElement): () => void {
   /** Tokens offered for rules and caps: the owner's balances, the settlement tokens and any already in the policy. */
   const ruleTokens = (): string[] => {
     const ids = new Set<string>([...SETTLEMENT_TOKENS.map((t) => t.tokenId), ...balances.map((b) => b.tokenId)]);
-    if (policy?.sweep) ids.add(policy.sweep.tokenId);
-    for (const k of Object.keys(policy?.limits?.perTx ?? {})) ids.add(k);
-    for (const k of Object.keys(policy?.limits?.daily ?? {})) ids.add(k);
+    const cur = draft ?? policy;
+    if (cur?.sweep) ids.add(cur.sweep.tokenId);
+    for (const k of Object.keys(cur?.limits?.perTx ?? {})) ids.add(k);
+    for (const k of Object.keys(cur?.limits?.daily ?? {})) ids.add(k);
     return [...ids];
   };
 
   el.innerHTML = `<div class="heading"><div><p class="eyebrow">TREASURY</p><h1>Agent</h1><p class="muted">The agent suggests actions from your rules. It never moves funds on its own: you review each suggestion and sign it in your wallet.</p></div><div class="home-actions"><button class="secondary" type="button" id="ag-run">Run agent now</button></div></div>
 <section class="panel" aria-labelledby="ag-inbox-title"><div class="section-title"><h2 id="ag-inbox-title">Inbox</h2></div><div id="ag-inbox"><p class="muted" role="status">Loading…</p></div></section>
-<section class="panel" aria-labelledby="ag-rules-title"><h2 id="ag-rules-title">Rules</h2><p class="muted">Changing your rules or limits needs a signature from your wallet. Signing a message does not send a transaction.</p><div id="ag-rules"><p class="muted">Loading…</p></div><div id="ag-rules-sign"></div></section>
+<section class="panel" aria-labelledby="ag-ai-title"><div class="section-title"><h2 id="ag-ai-title">AI summary · NEAR AI Cloud</h2><button class="secondary" type="button" id="ag-ai-refresh" hidden>Refresh</button></div><div id="ag-ai-summary"></div></section>
+<section class="panel" aria-labelledby="ag-rules-title"><h2 id="ag-rules-title">Rules</h2><p class="muted">Changing your rules or limits needs a signature from your wallet. Signing a message does not send a transaction.</p><div id="ag-ai-draft"></div><div id="ag-rules"><p class="muted">Loading…</p></div><div id="ag-rules-sign"></div></section>
 <section class="panel" aria-labelledby="ag-wl-title"><h2 id="ag-wl-title">Whitelist</h2><p class="muted">Addresses the agent may sweep to, and the only recipients allowed when "whitelisted recipients only" is on. Each change is signed in your wallet.</p><div id="ag-wl"><p class="muted">Loading…</p></div><div id="ag-wl-sign"></div></section>`;
 
   // --- inbox ---
@@ -438,6 +446,90 @@ ${t.refreshError ? `<p class="error" role="alert">${esc(t.refreshError)}</p>` : 
     if (n) n.textContent = t;
   };
 
+  // --- AI (optional; every result is escaped text, a draft only fills the form and is never saved by itself) ---
+
+  function drawAiDraft() {
+    const box = q("#ag-ai-draft");
+    if (!box) return;
+    if (!aiConfigured) {
+      box.innerHTML = `<p class="fine muted">AI features are not configured.</p>`;
+      return;
+    }
+    const d = draftState;
+    box.innerHTML = `<form id="ag-ai-form" novalidate><label for="ag-ai-text">Describe your rules</label>
+<textarea id="ag-ai-text" rows="3" maxlength="1000" placeholder="e.g. Convert anything worth over $50 to USDC and remind me about bills 3 days early">${esc(draftText)}</textarea>
+<button class="secondary" type="submit" ${d.busy ? "disabled" : ""}>${d.busy ? "Drafting…" : "Draft rules"}</button></form>
+<p class="error" role="alert">${esc(d.error)}</p>${d.notes ? `<p class="fine" role="status">${esc(d.notes)} Review and sign to save.</p>` : ""}`;
+    const ta = q<HTMLTextAreaElement>("#ag-ai-text")!;
+    ta.oninput = () => (draftText = ta.value);
+    q<HTMLFormElement>("#ag-ai-form")!.onsubmit = (e) => {
+      e.preventDefault();
+      void requestDraft();
+    };
+  }
+
+  async function requestDraft() {
+    draftText = q<HTMLTextAreaElement>("#ag-ai-text")!.value;
+    draftState = { busy: true, error: "", notes: "" };
+    drawAiDraft();
+    try {
+      const out = await postJson<{ policy: Policy; notes?: string }>("/api/agent/policy/draft", { text: draftText });
+      if (!alive) return;
+      draft = out.policy;
+      draftState = { busy: false, error: "", notes: out.notes || "Draft loaded into the rules below." };
+      rulesError = "";
+      rulesNote = "AI draft loaded. Review it, then save and sign.";
+      drawRules();
+    } catch (err) {
+      if (!alive) return;
+      draftState = { busy: false, error: msg(err), notes: "" };
+    }
+    drawAiDraft();
+  }
+
+  function drawAiSummary() {
+    const box = q("#ag-ai-summary");
+    const btn = q<HTMLButtonElement>("#ag-ai-refresh");
+    if (!box || !btn) return;
+    btn.hidden = !aiConfigured;
+    if (!aiConfigured) {
+      box.innerHTML = `<p class="fine muted">AI features are not configured.</p>`;
+      return;
+    }
+    box.innerHTML =
+      aiSummary === "loading" || aiSummary === null
+        ? `<p class="muted" role="status">Summarising…</p>`
+        : "error" in aiSummary
+          ? `<p class="muted" role="status">${esc(aiSummary.error)}</p>`
+          : `<p>${esc(aiSummary.text)}</p><p class="fine muted">Written by an AI from totals only. Check the numbers above.</p>`;
+    btn.disabled = aiSummary === "loading";
+  }
+
+  async function loadSummary(refresh: boolean) {
+    aiSummary = "loading";
+    drawAiSummary();
+    try {
+      const out = await api<{ text: string }>(`/api/agent/summary${refresh ? "?refresh=1" : ""}`);
+      if (alive) aiSummary = { text: out.text };
+    } catch (err) {
+      if (alive) aiSummary = { error: msg(err) };
+    }
+    if (alive) drawAiSummary();
+  }
+  q<HTMLButtonElement>("#ag-ai-refresh")!.onclick = () => void loadSummary(true);
+
+  async function loadAi() {
+    try {
+      aiConfigured = (await api<{ configured: boolean }>("/api/agent/ai-status")).configured === true;
+    } catch {
+      aiConfigured = false;
+    }
+    if (!alive) return;
+    drawAiDraft();
+    drawAiSummary();
+    if (aiConfigured) void loadSummary(false);
+  }
+
   // --- rules ---
 
   function amountField(id: string, units: string | undefined, tokenId: string | undefined): string {
@@ -447,7 +539,7 @@ ${t.refreshError ? `<p class="error" role="alert">${esc(t.refreshError)}</p>` : 
   }
 
   function drawRules() {
-    const p = policy;
+    const p = draft ?? policy;
     const c = p?.convert, s = p?.sweep, l = p?.limits, r = p?.reminders;
     const opts = (ids: string[], sel: string | undefined) => ids.map((id) => `<option value="${esc(id)}" ${id === sel ? "selected" : ""}>${esc(label(id))}</option>`).join("");
     const capRows = ruleTokens()
@@ -490,6 +582,9 @@ ${t.refreshError ? `<p class="error" role="alert">${esc(t.refreshError)}</p>` : 
       void startChange("rules", "Sign your new rules", { kind: "policy", policy: next }, async (signed) => {
         const saved = await api<{ policy: Policy }>("/api/agent/policy", { method: "PUT", body: JSON.stringify({ policy: next, ...signed }) });
         policy = saved.policy;
+        draft = null;
+        draftState.notes = "";
+        drawAiDraft();
         rulesNote = "Rules saved.";
         drawRules();
         void loadProposals(true);
@@ -639,6 +734,7 @@ ${t.refreshError ? `<p class="error" role="alert">${esc(t.refreshError)}</p>` : 
     }
     drawRules();
     drawWhitelist();
+    void loadAi();
     await loadProposals(false);
   }
 
