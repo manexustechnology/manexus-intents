@@ -53,3 +53,12 @@ export async function handle(fn: () => Promise<Response>): Promise<Response> {
     return json({ error: "Internal error" }, 500);
   }
 }
+
+/** CSRF guard: a non-GET/HEAD request carrying an Origin header must come from the request's own origin. */
+export function rejectCrossOrigin(req: Request): Response | null {
+  if (req.method === "GET" || req.method === "HEAD") return null;
+  const origin = req.headers.get("origin");
+  if (origin === null) return null;
+  if (origin === new URL(req.url).origin) return null;
+  return json({ error: "Cross-origin request rejected" }, 403);
+}

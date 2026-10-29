@@ -6,7 +6,8 @@
     "strict": true,
     "lib": ["ES2022", "DOM"],
     "noEmit": true,
-    "allowImportingTsExtensions": true
+    "allowImportingTsExtensions": true,
+    "skipLibCheck": true
   },
   "include": ["src", "shared", "server"]
 }

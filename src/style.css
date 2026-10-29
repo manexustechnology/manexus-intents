@@ -95,6 +95,7 @@ aside {
   text-align: left;
   font-weight: 550;
   gap: 13px;
+  text-decoration: none;
 }
 .nav > span {
   font-size: 22px;
@@ -835,7 +836,7 @@ dd {
   }
   nav {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(3, 1fr);
     height: 100%;
     padding: 5px 8px;
   }
@@ -1050,76 +1051,6 @@ dd {
     padding: 17px;
     font-size: 12px;
   }
-}
-.live-panel {
-  max-width: 950px;
-  margin: 25px auto;
-}
-.live-panel form {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 0 20px;
-}
-.live-panel form .fine,
-.live-panel form button {
-  grid-column: 1/-1;
-}
-.live-panel button:disabled {
-  opacity: 0.6;
-  cursor: wait;
-}
-@media (max-width: 760px) {
-  .live-panel form {
-    display: block;
-  }
-}
-.testnet-panel {
-  max-width: 950px;
-  margin: 0 auto 28px;
-  border-color: #b7d59c;
-}
-.testnet-panel h3 {
-  font-size: 15px;
-}
-.wallet-actions {
-  display: flex;
-  align-items: center;
-  gap: 18px;
-  flex-wrap: wrap;
-  margin: 20px 0;
-}
-.wallet-actions a {
-  font-size: 11px;
-}
-.address-line {
-  overflow-wrap: anywhere;
-  word-break: break-word;
-}
-.testnet-panel dd {
-  max-width: 65%;
-}
-.confirm-label {
-  display: flex;
-  align-items: start;
-  gap: 10px;
-  font-size: 12px;
-  line-height: 1.6;
-  margin: 20px 0;
-}
-.confirm-label input {
-  margin: 3px 0 0;
-}
-.testnet-panel button:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-#simulation-status {
-  padding-left: 23px;
-  font-size: 12px;
-  line-height: 1.7;
-}
-#simulation-status li {
-  margin: 13px 0;
 }
 .invoice-toolbar {
   display: flex;
@@ -1377,4 +1308,100 @@ dd {
 #invoice-share-result .textbutton {
   display: inline-block;
   margin-right: 18px;
+}
+
+/* App shell: account chip, signed-out layout, login */
+.account-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid #dce5de;
+  background: #fafcf9;
+  border-radius: 999px;
+  padding: 5px 12px 5px 5px;
+  font-size: 12px;
+  max-width: 260px;
+}
+.account-chip .kind {
+  background: #173f35;
+  color: #b9f06e;
+  border-radius: 999px;
+  padding: 3px 8px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.8px;
+}
+.account-chip .account-id {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bare .page {
+  margin-left: 0;
+}
+.bare header {
+  gap: 16px;
+}
+.login {
+  max-width: 820px;
+  margin: 20px auto;
+}
+.login h1 {
+  margin-top: 6px;
+}
+.login-options {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+  margin: 26px 0 14px;
+}
+.login-card h2 {
+  font-size: 17px;
+}
+.login-card .fine {
+  min-height: 3.4em;
+}
+.login button:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+.wallet-choices {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+.wallet-choices[hidden] {
+  display: none;
+}
+.choice {
+  border: 1px solid #dce5de;
+  background: #fff;
+  border-radius: 9px;
+  padding: 11px 14px;
+  text-align: left;
+  font-weight: 600;
+  color: #284b32;
+}
+.choice:hover {
+  background: #eaf3e6;
+}
+@media (max-width: 760px) {
+  .login-options {
+    grid-template-columns: 1fr;
+  }
+  .account-chip {
+    max-width: 170px;
+  }
+  .bare footer {
+    padding-bottom: 24px;
+  }
+  .bare .brand {
+    display: flex;
+    font-size: 20px;
+  }
+  .bare .brandmark {
+    width: 30px;
+    height: 30px;
+    font-size: 25px;
+  }
 }

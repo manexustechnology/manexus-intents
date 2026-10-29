@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { HttpError, handle, json, readJson } from "../../server/http.ts";
+import { HttpError, handle, json, readJson, rejectCrossOrigin } from "../../server/http.ts";
 
 test("handle maps HttpError to status and error body", async () => {
   const res = await handle(async () => {
@@ -36,4 +36,18 @@ test("readJson rejects invalid JSON with 400", async () => {
 
 test("readJson parses valid JSON", async () => {
   assert.deepEqual(await readJson(post('{"a":1}')), { a: 1 });
+});
+
+test("rejectCrossOrigin blocks non-GET requests from another origin", async () => {
+  const req = (method: string, origin?: string) =>
+    new Request("https://app.example/api/x", { method, headers: origin ? { origin } : {} });
+  const blocked = rejectCrossOrigin(req("POST", "https://evil.example"));
+  assert.equal(blocked?.status, 403);
+  assert.deepEqual(await blocked?.json(), { error: "Cross-origin request rejected" });
+  assert.equal(rejectCrossOrigin(req("POST", "null"))?.status, 403);
+  assert.equal(rejectCrossOrigin(req("DELETE", "https://app.example:444"))?.status, 403);
+  assert.equal(rejectCrossOrigin(req("POST", "https://app.example")), null);
+  assert.equal(rejectCrossOrigin(req("POST")), null);
+  assert.equal(rejectCrossOrigin(req("GET", "https://evil.example")), null);
+  assert.equal(rejectCrossOrigin(req("HEAD", "https://evil.example")), null);
 });
