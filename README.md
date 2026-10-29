@@ -210,9 +210,11 @@ PLAYWRIGHT_BASE_URL=http://127.0.0.1:24012 npm run test:e2e -- --workers=1
 
 ## Hackathon work vs. pre-existing baseline
 
-**Baseline:** commits up to and including `7d827b1` (2026-10-21/22), a static, browser-only quote/invoice-preview prototype with no backend, no wallet sign-in, and no real payments. **Everything after `7d827b1` is hackathon work** (Plan 1 core loop, Plan 2 treasury features, Plan 3 agent and submission). Generated with `git log --oneline 7d827b1..HEAD`, newest first; the commit that adds this list and `docs/SUBMISSION.md` follows these:
+**Baseline:** commits up to and including `7d827b1` (2026-10-21/22), a static, browser-only quote/invoice-preview prototype with no backend, no wallet sign-in, and no real payments. **Everything after `7d827b1` is hackathon work** (Plan 1 core loop, Plan 2 treasury features, Plan 3 agent and submission). Generated with `git log --oneline 7d827b1..HEAD`, newest first, plus this commit (`docs: regenerate the hackathon commit list`), which updates the list:
 
 ```
+e57ab21 fix: local dev serves a fresh build and the API on one origin
+30039ae docs: hackathon submission package and agent end-to-end test
 deadced fix: rate-limit AI rule drafting, discard a draft, summary token headroom
 b1020d0 feat: NEAR AI Cloud rule drafting and treasury summary
 cb7628c fix: unlink a failed transfer when its proposal reopens; guard the stuck release
