@@ -13,8 +13,10 @@ type Payment = {
 type Payments = { invoiceStatus: InvoiceRow["status"]; attempts: Payment[]; refreshError?: string };
 
 const OUTCOME_LABEL: Record<string, string> = {
-  paid: "Paid", duplicate: "Extra payment", after_cancel: "Paid after cancel", refunded: "Refunded", failed: "Failed",
+  paid: "Paid", duplicate: "Extra payment", after_cancel: "Paid after cancel", refunded: "Refunded", failed: "Failed", mismatch: "Needs review",
 };
+/** Outcomes where 1Click reports a delivered amount, so it is shown (for `mismatch`, next to Needs review). */
+const RECEIVED = new Set(["paid", "duplicate", "after_cancel", "mismatch"]);
 
 export function paymentsHtml(p: Payments, symbol: string): string {
   const rows = p.attempts.map((a) => {
@@ -24,7 +26,7 @@ export function paymentsHtml(p: Payments, symbol: string): string {
     const sent = a.amountInFormatted ? `${esc(a.amountInFormatted)} ${esc(a.symbol)} on ${esc(a.blockchain)}` : "Amount unavailable";
     const extra = a.outcome === "duplicate" || a.outcome === "after_cancel" ? `<p class="fine">Extra payment received (in your balance)</p>` : "";
     return `<div class="payment-row" data-deposit="${esc(a.depositAddress)}"><div>${badge} <strong>${sent}</strong> <span class="muted">${esc(a.createdAt.slice(0, 16).replace("T", " "))} UTC</span></div>${extra}${
-      a.amountOutFormatted && (a.outcome === "paid" || a.outcome === "duplicate" || a.outcome === "after_cancel") ? `<p class="fine">Received ${esc(a.amountOutFormatted)} ${esc(symbol)}</p>` : ""
+      a.amountOutFormatted && RECEIVED.has(a.outcome ?? "") ? `<p class="fine">Received ${esc(a.amountOutFormatted)} ${esc(symbol)}</p>` : ""
     }${a.destinationTxHashes.length ? `<p class="fine">Settlement: ${txLinks(a.destinationTxHashes)}</p>` : ""}${
       a.originTxHashes.length ? `<p class="fine">Deposit tx: ${a.originTxHashes.map((h) => `<code>${esc(h)}</code>`).join(" ")}</p>` : ""
     }</div>`;

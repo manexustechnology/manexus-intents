@@ -20,6 +20,12 @@ const active = (a: Attempt) => !a.outcome && !a.expired && OPEN.has(a.status);
 /** Funds were seen; instructions are no longer needed. */
 const settling = (a: Attempt) => a.status === "KNOWN_DEPOSIT_TX" || a.status === "PROCESSING" || a.status === "SUCCESS";
 
+const MISMATCH = "This payment could not be matched to the invoice. Contact the business before paying again.";
+const EXTRA = "Your payment was received by the business as an extra payment. Contact them to arrange a refund.";
+/** Notice for the payer's own attempt once it has an outcome that is not a plain paid/refunded/failed. */
+const ownNotice = (a: Attempt | undefined) =>
+  a?.outcome === "mismatch" ? MISMATCH : a?.outcome === "duplicate" || a?.outcome === "after_cancel" ? EXTRA : "";
+
 const post = <T>(path: string, body: unknown) => api<T>(path, { method: "POST", body: JSON.stringify(body) });
 const label = (t: Token) => `${t.symbol} · ${t.blockchain}`;
 
@@ -59,6 +65,8 @@ export function mountPay(el: HTMLElement, params: Record<string, string>): () =>
   let attempt: Attempt | null = null;
   let attempts: Attempt[] = [];
   let notice = "";
+  /** About this browser's own attempt; shown on every panel, including paid and cancelled. */
+  let own = "";
   const dismissedKey = `${key}:dismissed`;
   const dismissed = readDismissed(dismissedKey);
   let error = "";
@@ -79,18 +87,19 @@ export function mountPay(el: HTMLElement, params: Record<string, string>): () =>
     }
     const head = `<div class="heading"><div><p class="eyebrow">INVOICE ${esc(inv.data.number)}</p><h1>Pay ${esc(inv.totalFormatted)} ${esc(inv.symbol)}</h1><p class="muted">Paid to ${esc(inv.payTo)} on NEAR Intents</p></div></div>`;
     const summary = `<section class="panel">${details(inv.data)}</section>`;
+    const ownAlert = own ? `<p class="error" role="alert">${esc(own)}</p>` : "";
     let body = "";
-    if (inv.status === "paid") body = paid();
-    else if (inv.status === "cancelled") body = `<section class="panel"><h2>Cancelled</h2><p class="muted">This invoice was cancelled and can no longer be paid.</p></section>`;
+    if (inv.status === "paid") body = paid(ownAlert);
+    else if (inv.status === "cancelled") body = `<section class="panel"><h2>Cancelled</h2>${ownAlert}<p class="muted">This invoice was cancelled and can no longer be paid.</p></section>`;
     else if (attempt && active(attempt)) body = settling(attempt) ? processing(attempt) : instructions(attempt);
     else body = form(attempt?.expired ?? false);
     el.innerHTML = `${head}${summary}${body}`;
     wire();
   }
 
-  function paid(): string {
+  function paid(ownAlert: string): string {
     const hashes = attempts.find((a) => a.outcome === "paid")?.destinationTxHashes ?? [];
-    return `<section class="panel"><h2>Paid — thank you</h2><p class="muted">This invoice has been paid. Thank you.</p>${hashes.length ? `<p class="fine">Settlement on NEAR: ${txLinks(hashes)}</p>` : ""}</section>`;
+    return `<section class="panel"><h2>Paid — thank you</h2>${ownAlert}<p class="muted">This invoice has been paid. Thank you.</p>${hashes.length ? `<p class="fine">Settlement on NEAR: ${txLinks(hashes)}</p>` : ""}</section>`;
   }
 
   function processing(a: Attempt): string {
@@ -153,6 +162,7 @@ ${done ? `<p class="muted" role="status">Status: ${esc(a.status.replaceAll("_", 
         attempt = await post<Attempt>(`${base}/quote`, { originAsset: chosen, refundTo: refund });
         attempts = [attempt, ...attempts.filter((a) => a.depositAddress !== attempt!.depositAddress)];
         notice = "";
+        own = "";
         store(key, attempt);
       } catch (err) {
         error = (err as Error).message;
@@ -233,25 +243,31 @@ ${done ? `<p class="muted" role="status">Status: ${esc(a.status.replaceAll("_", 
     if (inv) inv = { ...inv, status: st.invoiceStatus };
     if (initial) {
       const saved = store(key);
+      own = ownNotice(st.attempts.find((a) => a.depositAddress === saved?.depositAddress));
       const cur = st.attempts.find((a) => active(a) && !dismissed.has(a.depositAddress));
       attempt = cur ? merge(saved, cur) : null;
-      if (!attempt && saved) store(key, null);
+      // Keep it while it explains this browser's own payment, so the notice survives a reload.
+      if (!attempt && saved && !own) store(key, null);
       const latest = st.attempts.find((a) => !dismissed.has(a.depositAddress));
       if (!attempt && latest?.outcome === "refunded") notice = "Your last payment was refunded to your refund address. You can try again below.";
       else if (!attempt && latest?.outcome === "failed") notice = "Your last payment could not be completed. Any funds are returned to your refund address.";
+      else if (!attempt && latest?.outcome === "mismatch") notice = MISMATCH;
+      if (own) notice = own;
     } else if (attempt) {
       const cur = st.attempts.find((a) => a.depositAddress === attempt!.depositAddress);
       if (cur) {
         attempt = merge(attempt, cur);
         if (cur.outcome === "refunded") notice = "Your payment was refunded to your refund address. You can try again below.";
         else if (cur.outcome === "failed") notice = "Your payment could not be completed. Any funds are returned to your refund address.";
-        if (!active(attempt)) store(key, null);
+        own = ownNotice(cur);
+        if (own) notice = own;
+        if (!active(attempt) && !own) store(key, null);
       }
     }
   }
 
   const signature = () =>
-    JSON.stringify([inv?.status, attempt?.status, attempt?.outcome, attempt?.expired, attempt?.amountInFormatted, notice, attempts.find((a) => a.outcome === "paid")?.destinationTxHashes]);
+    JSON.stringify([inv?.status, attempt?.status, attempt?.outcome, attempt?.expired, attempt?.amountInFormatted, notice, own, attempts.find((a) => a.outcome === "paid")?.destinationTxHashes]);
 
   function schedule() {
     window.clearTimeout(pollTimer);

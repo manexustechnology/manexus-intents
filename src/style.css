@@ -1431,7 +1431,8 @@ a.primary {
   background: #2f6b3c;
 }
 .badge.outcome-duplicate,
-.badge.outcome-after_cancel {
+.badge.outcome-after_cancel,
+.badge.outcome-mismatch {
   color: #6b4f12;
   border-color: #e3cf96;
   background: #fbf5e3;

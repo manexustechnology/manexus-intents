@@ -78,7 +78,7 @@ test("decideOutcome: matching SUCCESS is paid, carries amountOut", () => {
   assert.equal(decideOutcome(INV, ATT, swap("SUCCESS", { amountOut: "700001" })).outcome, "paid");
 });
 
-test("decideOutcome: any mismatch on SUCCESS is failed, never paid", () => {
+test("decideOutcome: a definite mismatch on SUCCESS is mismatch, never paid or failed", () => {
   const cases: [Partial<SwapStatus>, Partial<QuoteRequest>][] = [
     [{}, { recipient: "attacker.near" }],
     [{}, { recipient: "Alice.near" }],
@@ -87,25 +87,30 @@ test("decideOutcome: any mismatch on SUCCESS is failed, never paid", () => {
     [{}, { swapType: "EXACT_INPUT" }],
     [{}, { amount: "1" }],
     [{ amountOut: "699999" }, {}],
-    [{ amountOut: "" }, {}],
-    [{ amountOut: "7e5" }, {}],
-    [{ amountOut: undefined }, {}],
     [{ depositAddress: "other" }, {}],
   ];
   for (const [s, r] of cases) {
     const d = decideOutcome(INV, ATT, swap("SUCCESS", s, r));
-    assert.equal(d.outcome, "failed", JSON.stringify([s, r]));
+    assert.equal(d.outcome, "mismatch", JSON.stringify([s, r]));
     assert.equal(d.status, "SUCCESS");
   }
-  assert.equal(decideOutcome(INV, { ...ATT, invoiceId: "other" }, swap("SUCCESS")).outcome, "failed");
+  assert.equal(decideOutcome(INV, { ...ATT, invoiceId: "other" }, swap("SUCCESS")).outcome, "mismatch");
+});
+
+test("decideOutcome: SUCCESS with incomplete details records the status only (re-checked later)", () => {
+  for (const s of [{ amountOut: "" }, { amountOut: "7e5" }, { amountOut: undefined }, { quoteRequest: undefined }] as Partial<SwapStatus>[]) {
+    const want = s.quoteRequest === undefined && "quoteRequest" in s ? { status: "SUCCESS", amountOut: "700000" } : { status: "SUCCESS" };
+    assert.deepEqual(decideOutcome(INV, ATT, swap("SUCCESS", s)), want, JSON.stringify(s));
+    assert.deepEqual(decideOutcome({ ...INV, status: "paid", paidBy: "dep2" }, ATT, swap("SUCCESS", s)), want);
+  }
 });
 
 test("decideOutcome: invoice state decides duplicate / after_cancel / idempotent paid", () => {
   assert.equal(decideOutcome({ ...INV, status: "paid", paidBy: "dep2" }, ATT, swap("SUCCESS")).outcome, "duplicate");
   assert.equal(decideOutcome({ ...INV, status: "paid", paidBy: "dep1" }, ATT, swap("SUCCESS")).outcome, "paid");
   assert.equal(decideOutcome({ ...INV, status: "cancelled" }, ATT, swap("SUCCESS")).outcome, "after_cancel");
-  // A mismatched SUCCESS on a paid invoice is still failed, not an "extra payment in your balance".
-  assert.equal(decideOutcome({ ...INV, status: "paid", paidBy: "dep2" }, ATT, swap("SUCCESS", {}, { recipient: "x.near" })).outcome, "failed");
+  // A mismatched SUCCESS on a paid invoice is mismatch, not an "extra payment in your balance".
+  assert.equal(decideOutcome({ ...INV, status: "paid", paidBy: "dep2" }, ATT, swap("SUCCESS", {}, { recipient: "x.near" })).outcome, "mismatch");
 });
 
 test("decideOutcome: non-final statuses carry no outcome; REFUNDED/FAILED map", () => {
@@ -133,11 +138,33 @@ test("SUCCESS matching → attempt paid, invoice paid with paid_by and paid_at",
   assert.deepEqual(JSON.parse(a.upstream!).destinationTxHashes, [NEAR_TX]);
 });
 
-test("SUCCESS to attacker.near → failed, invoice stays issued", async () => {
+test("SUCCESS to attacker.near → mismatch, invoice stays issued", async () => {
   const { db, inv, deps } = await setup({ dep1: swap("SUCCESS", {}, { recipient: "attacker.near" }) });
   await refreshInvoice(deps, inv.id);
   assert.equal((await reload(db, inv.id)).status, "issued");
-  assert.equal((await byAddr(db, inv.id)).dep1.outcome, "failed");
+  assert.equal((await byAddr(db, inv.id)).dep1.outcome, "mismatch");
+});
+
+test("SUCCESS without amountOut → status recorded, no outcome; a later complete status pays", async () => {
+  const { db, inv, deps, statuses, calls } = await setup({ dep1: swap("SUCCESS", { amountOut: undefined }) });
+  await refreshInvoice(deps, inv.id);
+  assert.equal((await reload(db, inv.id)).status, "issued");
+  let a = (await byAddr(db, inv.id)).dep1;
+  assert.equal(a.status, "SUCCESS");
+  assert.equal(a.outcome, undefined);
+  statuses.dep1 = swap("SUCCESS");
+  await refreshInvoice({ ...deps, now: new Date(NOW.getTime() + 10_000) }, inv.id);
+  assert.equal(calls.length, 2, "re-checked on the next refresh");
+  a = (await byAddr(db, inv.id)).dep1;
+  assert.equal(a.outcome, "paid");
+  assert.equal((await reload(db, inv.id)).paidBy, "dep1");
+});
+
+test("ownerPayments shows the received amount for a mismatch", async () => {
+  const { inv, deps } = await setup({ dep1: swap("SUCCESS", { amountOut: "699999" }) });
+  const [a] = (await ownerPayments(deps, OWNER, inv.id)).attempts;
+  assert.equal(a.outcome, "mismatch");
+  assert.equal(a.amountOutFormatted, "0.699999");
 });
 
 test("SUCCESS with amountOut 699999 → not paid", async () => {
@@ -146,7 +173,7 @@ test("SUCCESS with amountOut 699999 → not paid", async () => {
   const after = await reload(db, inv.id);
   assert.equal(after.status, "issued");
   assert.equal(after.paidBy, undefined);
-  assert.notEqual((await byAddr(db, inv.id)).dep1.outcome, "paid");
+  assert.equal((await byAddr(db, inv.id)).dep1.outcome, "mismatch");
 });
 
 test("INCOMPLETE_DEPOSIT keeps the invoice issued; REFUNDED → refunded", async () => {

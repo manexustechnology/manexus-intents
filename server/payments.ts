@@ -5,7 +5,11 @@ import type { OneClickToken, QuoteRequest, createOneClick } from "./oneclick.ts"
 import { validDestination } from "../shared/address.ts";
 import { formatAmount } from "../shared/units.ts";
 
-export type Outcome = "paid" | "duplicate" | "after_cancel" | "refunded" | "failed";
+/**
+ * `failed`: upstream FAILED. `mismatch`: upstream SUCCESS whose executed quote does not match the invoice;
+ * funds reached someone, so it needs review and is never reported to the payer as refunded.
+ */
+export type Outcome = "paid" | "duplicate" | "after_cancel" | "refunded" | "failed" | "mismatch";
 
 export type AttemptRow = {
   depositAddress: string;

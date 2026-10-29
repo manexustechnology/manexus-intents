@@ -173,3 +173,62 @@ test("XSS-shaped upstream values are escaped", async ({ page }) => {
   await expect(page.getByText("<img src=x onerror=alert(1)>")).toBeVisible();
   await expect(page.locator("img")).toHaveCount(0);
 });
+
+const MISMATCH = "This payment could not be matched to the invoice. Contact the business before paying again.";
+const EXTRA = "Your payment was received by the business as an extra payment. Contact them to arrange a refund.";
+const saveOwn = (page: Page) =>
+  page.addInitScript(() => sessionStorage.setItem("manexus:pay:pub1", JSON.stringify({ depositAddress: "0xDEPOSIT", deadline: new Date(Date.now() + 60_000).toISOString(), status: "PROCESSING" })));
+
+test("a mismatched SUCCESS asks the payer to contact the business and never says refunded", async ({ page }) => {
+  await mock(page, "issued", undefined, () => ({ invoiceStatus: "issued", attempts: [pending({ status: "SUCCESS", outcome: "mismatch" })] }));
+  await page.goto("/#/pay/pub1");
+  await expect(page.getByRole("alert").filter({ hasText: MISMATCH })).toBeVisible();
+  await expect(page.getByText(/returned to your refund address|refunded to your refund address/)).toHaveCount(0);
+});
+
+test("polling: processing → mismatch shows the contact-the-business notice", async ({ page }) => {
+  await page.clock.install();
+  let phase = 0;
+  await mock(page, "issued", undefined, () =>
+    ({ invoiceStatus: "issued", attempts: [phase === 0 ? pending({ status: "PROCESSING" }) : pending({ status: "SUCCESS", outcome: "mismatch" })] }));
+  await page.goto("/#/pay/pub1");
+  await expect(page.getByRole("heading", { name: "Processing" })).toBeVisible();
+  phase = 1;
+  await page.clock.runFor(10_000);
+  await expect(page.getByRole("alert").filter({ hasText: MISMATCH })).toBeVisible();
+  await expect(page.getByText(/refund address\./)).toHaveCount(0);
+});
+
+test("the payer's own extra payment on a paid invoice says so; other visitors do not see it", async ({ page }) => {
+  const body = () => ({ invoiceStatus: "paid", attempts: [pending({ status: "SUCCESS", outcome: "duplicate" }), pending({ depositAddress: "0xFIRST", status: "SUCCESS", outcome: "paid" })] });
+  await mock(page, "paid", undefined, body);
+  await page.goto("/#/pay/pub1");
+  await expect(page.getByRole("heading", { name: "Paid — thank you" })).toBeVisible();
+  await expect(page.getByText(EXTRA)).toHaveCount(0);
+  await saveOwn(page);
+  await page.reload();
+  await expect(page.getByRole("alert").filter({ hasText: EXTRA })).toBeVisible();
+});
+
+test("the payer's own payment after cancel says it was received as an extra payment", async ({ page }) => {
+  await saveOwn(page);
+  await mock(page, "cancelled", undefined, () => ({ invoiceStatus: "cancelled", attempts: [pending({ status: "SUCCESS", outcome: "after_cancel" })] }));
+  await page.goto("/#/pay/pub1");
+  await expect(page.getByRole("heading", { name: "Cancelled" })).toBeVisible();
+  await expect(page.getByRole("alert").filter({ hasText: EXTRA })).toBeVisible();
+});
+
+test("polling: own processing attempt becomes duplicate when another payment won", async ({ page }) => {
+  await page.clock.install();
+  let phase = 0;
+  await mock(page, "issued", undefined, () =>
+    phase === 0
+      ? { invoiceStatus: "issued", attempts: [pending({ status: "PROCESSING" })] }
+      : { invoiceStatus: "paid", attempts: [pending({ status: "SUCCESS", outcome: "duplicate" }), pending({ depositAddress: "0xFIRST", status: "SUCCESS", outcome: "paid" })] });
+  await page.goto("/#/pay/pub1");
+  await expect(page.getByRole("heading", { name: "Processing" })).toBeVisible();
+  phase = 1;
+  await page.clock.runFor(10_000);
+  await expect(page.getByRole("heading", { name: "Paid — thank you" })).toBeVisible();
+  await expect(page.getByRole("alert").filter({ hasText: EXTRA })).toBeVisible();
+});

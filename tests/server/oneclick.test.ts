@@ -82,3 +82,10 @@ test("injected fetch is called bare, never as a method (workerd throws Illegal i
   const tokens = await createOneClick({ baseUrl: "https://x", fetch: strict }).tokens();
   assert.equal(tokens[0].assetId, "a");
 });
+
+test("status without quoteRequest parses with quoteRequest undefined (decided later, not an upstream error)", async () => {
+  const h = fake(200, { status: "SUCCESS", updatedAt: "t", swapDetails: { amountOut: "5" } });
+  const s = await createOneClick({ baseUrl: "https://x", fetch: h.f }).status("dep");
+  assert.equal(s.status, "SUCCESS");
+  assert.equal(s.quoteRequest, undefined);
+});

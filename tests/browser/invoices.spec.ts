@@ -110,3 +110,12 @@ test("owner sees verified payments, extra payments and the Paid chip", async ({ 
   await page.getByRole("link", { name: "← Invoices" }).click();
   await expect(page.locator(".invoice-record", { hasText: "DEMO-001" }).locator(".badge.status-paid")).toHaveText("✓ Paid");
 });
+
+test("owner sees a mismatched payment as Needs review with the received amount", async ({ page }) => {
+  await mockApi(page, [attempt({ outcome: "mismatch", amountOut: "699999", amountOutFormatted: "0.699999" })]);
+  await createAndIssue(page);
+  const row = page.locator('#invoice-payments [data-deposit="dep1"]');
+  await expect(row.locator(".badge")).toHaveText("Needs review");
+  await expect(row).toContainText("Received 0.699999 USDC");
+  await expect(page.locator(".heading .badge.status-issued")).toBeVisible();
+});

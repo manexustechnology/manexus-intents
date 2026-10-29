@@ -15,28 +15,29 @@ const DIGITS = /^[0-9]+$/;
  * Pure verdict for one attempt from its 1Click status. This is the only function that may yield `paid`.
  * SUCCESS counts only if the quote that 1Click executed is exactly the one we asked for: EXACT_OUTPUT of
  * the invoice total in the invoice token into the owner's Intents account, delivered amount >= total.
+ * A SUCCESS without the executed quote or a base-unit `amountOut` is not decided yet (re-checked on the
+ * next refresh); a SUCCESS that definitely does not match is `mismatch`.
  */
 export function decideOutcome(invoice: InvoiceRow, attempt: AttemptRow, s: SwapStatus): Decision {
-  const base: Decision = { status: s.status, ...(s.amountOut !== undefined ? { amountOut: s.amountOut } : {}) };
+  const base: Decision = { status: s.status, ...(s.amountOut !== undefined && DIGITS.test(s.amountOut) ? { amountOut: s.amountOut } : {}) };
   if (s.status === "REFUNDED") return { ...base, outcome: "refunded" };
   if (s.status === "FAILED") return { ...base, outcome: "failed" };
   if (s.status !== "SUCCESS") return base;
 
   const q = s.quoteRequest;
+  if (!q || typeof s.amountOut !== "string" || !DIGITS.test(s.amountOut)) return base;
   const matches =
     attempt.invoiceId === invoice.id &&
     (s.depositAddress === undefined || s.depositAddress === attempt.depositAddress) &&
-    q?.swapType === "EXACT_OUTPUT" &&
+    q.swapType === "EXACT_OUTPUT" &&
     q.recipient === invoice.owner &&
     q.recipientType === "INTENTS" &&
     q.destinationAsset === invoice.tokenId &&
     q.amount === invoice.total &&
     DIGITS.test(invoice.total) &&
     BigInt(invoice.total) > 0n &&
-    typeof s.amountOut === "string" &&
-    DIGITS.test(s.amountOut) &&
     BigInt(s.amountOut) >= BigInt(invoice.total);
-  if (!matches) return { ...base, outcome: "failed" };
+  if (!matches) return { ...base, outcome: "mismatch" };
   if (invoice.status === "issued") return { ...base, outcome: "paid" };
   if (invoice.status === "paid") return { ...base, outcome: invoice.paidBy === attempt.depositAddress ? "paid" : "duplicate" };
   if (invoice.status === "cancelled") return { ...base, outcome: "after_cancel" };
@@ -108,8 +109,8 @@ export async function refreshInvoice(deps: ReconcileDeps, invoiceId: string): Pr
         d = decideOutcome(inv, a, s);
       }
     }
-    if (s.status === "SUCCESS" && d.outcome === "failed")
-      console.warn(`reconcile: SUCCESS for ${a.depositAddress} on invoice ${invoiceId} does not match the invoice; not marked paid`);
+    if (d.outcome === "mismatch")
+      console.warn(`reconcile: SUCCESS for ${a.depositAddress} on invoice ${invoiceId} does not match the invoice; not marked paid, needs review`);
     // Never overwrite an outcome another refresh already recorded.
     await db
       .prepare("UPDATE payment_attempts SET status=?, outcome=?, amount_out=?, upstream=?, updated_at=? WHERE deposit_address=? AND outcome IS NULL")
