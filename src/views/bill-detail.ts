@@ -6,7 +6,7 @@ import { amountLabel, billStatusBadge, dueChip, type Bill } from "./bills.ts";
 import { countdown, msg } from "./transfer-ui.ts";
 import { chainName, explorerLinks } from "./withdraw.ts";
 
-type Detail = Bill & { transfer?: TransferView; vendorInvoiceStatus?: string; vendorOutcome?: string; extraPayment: boolean; refreshError?: string };
+type Detail = Bill & { transfer?: TransferView; vendorInvoiceStatus?: string; vendorOutcome?: string; extraPayment: boolean; refreshError?: string; pendingQuote?: Quote };
 type Balance = { tokenId: string; symbol: string; blockchain: string; decimals: number; amount: string; formatted: string };
 type Quote = { depositAddress: string; deadline: string; amountOutFormatted: string; intent: { standard: "nep413" | "erc191"; payload: unknown }; transfer: TransferView };
 type Step =
@@ -41,8 +41,6 @@ export function mountBill(el: HTMLElement, params: Record<string, string>): () =
   let error = "";
   let busy = "";
   let step: Step = { kind: "view" };
-  /** The quote this page obtained, so an unsigned payment can be resumed after "Back". */
-  let lastQuote: Quote | null = null;
   let nearWallet: NearWalletId = "meteor-wallet";
   const id = params.id ?? "";
   const q = <T extends HTMLElement>(s: string) => el.querySelector<T>(s);
@@ -86,8 +84,8 @@ ${b.extraPayment ? `<p class="fine">The payment arrived after the vendor's invoi
     if (b.status === "paying" && t) {
       const unsigned = t.status === "AWAITING_SIGNATURE";
       return `<section class="panel" id="bill-status"><h2>Payment in progress</h2><p class="muted" role="status" id="bill-transfer-status">${esc(t.amountFormatted)} ${esc(t.originSymbol)} → ${esc(amountLabel(b))}: ${esc(tText)}.</p>
-${unsigned && lastQuote?.depositAddress === t.depositAddress && !t.expired ? `<div class="invoice-actions"><button class="primary" type="button" id="bill-resume">Review and sign</button></div>` : ""}
-${unsigned ? `<p class="fine">If you left before signing, this quote expires in <span id="bill-countdown">${countdown(t.deadline)}</span>; you can then request a new one.</p>` : `<p class="fine">This usually takes a few minutes. You can leave this page.</p>`}${refresh}</section>`;
+${unsigned && b.pendingQuote?.depositAddress === t.depositAddress ? `<div class="invoice-actions"><button class="primary" type="button" id="bill-resume">Review and sign</button></div>` : ""}
+${unsigned ? `<p class="fine">If you left before signing, this quote expires in <span id="bill-countdown">${countdown(t.deadline)}</span>; you can then request a new one.</p>` : `<p class="fine">This usually takes a few minutes. You can leave this page.</p>`}${refresh}<p class="error" id="bill-detail-error" role="alert">${esc(error)}</p></section>`;
     }
     const last = t && (t.status === "FAILED" || t.status === "REFUNDED") ? `<p class="fine" id="bill-last">The last payment attempt ${t.status === "REFUNDED" ? "was refunded to your NEAR Intents balance" : "failed"}. You can pay again.</p>` : "";
     return `<section class="panel" id="bill-status">${last}${refresh}<p class="error" id="bill-detail-error" role="alert">${esc(error)}</p>
@@ -139,9 +137,17 @@ ${needsNearWallet ? `<label>Wallet<select id="bill-wallet">${NEAR_WALLETS.map((x
     if (step.kind === "view") {
       q<HTMLButtonElement>("#bill-pay")?.addEventListener("click", () => void startPay());
       q<HTMLButtonElement>("#bill-cancel")?.addEventListener("click", () => void cancel());
-      q<HTMLButtonElement>("#bill-resume")?.addEventListener("click", () => {
-        if (!lastQuote) return;
-        step = { kind: "review", quote: lastQuote, confirmed: false };
+      q<HTMLButtonElement>("#bill-resume")?.addEventListener("click", async () => {
+        const quote = bill?.pendingQuote;
+        if (!quote) return;
+        window.clearTimeout(poll); // a poll would reset the review
+        try {
+          session ??= await api<Session>("/api/me");
+        } catch (e) {
+          return setError(msg(e));
+        }
+        if (!alive) return;
+        step = { kind: "review", quote, confirmed: false };
         error = "";
         draw();
       });
@@ -238,7 +244,6 @@ ${needsNearWallet ? `<label>Wallet<select id="bill-wallet">${NEAR_WALLETS.map((x
     try {
       const quote = await postJson<Quote>(`/api/bills/${encodeURIComponent(id)}/quote`, { originAsset: origin });
       if (!alive) return;
-      lastQuote = quote;
       step = { kind: "review", quote, confirmed: false };
     } catch (e) {
       error = msg(e);

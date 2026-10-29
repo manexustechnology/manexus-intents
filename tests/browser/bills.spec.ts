@@ -182,3 +182,25 @@ test("an overdue scheduled bill shows the overdue chip and can be cancelled", as
   await expect(page.locator("#bill-status h2")).toHaveText("Cancelled");
   void calls;
 });
+
+test("an unsigned quote can be resumed after leaving the page", async ({ page }) => {
+  const pending = { depositAddress: DEP, deadline: "2999-01-01T00:00:00.000Z", amountOutFormatted: "1", intent: { standard: "erc191", payload: PAYLOAD }, transfer: transfer("AWAITING_SIGNATURE") };
+  let submitted = false;
+  const calls = await setup(page, {
+    detail: () => (submitted ? bill({ status: "paid", transfer: transfer("SUCCESS") }) : bill({ status: "paying", depositAddress: DEP, transfer: transfer("AWAITING_SIGNATURE"), pendingQuote: pending })),
+  });
+  await page.route("**/api/transfers/submit", (r) => {
+    submitted = true;
+    calls.push({ path: "/api/transfers/submit", method: "POST", body: JSON.parse(r.request().postData()!) });
+    return r.fulfill({ json: transfer("PROCESSING") });
+  });
+  await page.goto("/#/bills/b1");
+  await expect(page.locator("#bill-status h2")).toHaveText("Payment in progress");
+  await page.getByRole("button", { name: "Review and sign" }).click();
+  await expect(page.locator("#rv-send")).toHaveText("≈ 1.01 USDC");
+  await page.locator("#rv-confirm").check();
+  await page.getByRole("button", { name: "Sign in wallet" }).click();
+  await expect(page.locator("#bill-status h2")).toHaveText("Paid");
+  expect(calls.find((c) => c.path === "/api/transfers/submit")!.body).toMatchObject({ depositAddress: DEP });
+  expect(calls.some((c) => c.path === "/api/bills/b1/quote")).toBe(false);
+});

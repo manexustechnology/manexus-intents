@@ -56,6 +56,8 @@ export type BillDetail = BillView & {
   /** The bill was paid, but the vendor invoice had already been paid or cancelled (duplicate/after_cancel). */
   extraPayment: boolean;
   refreshError?: string;
+  /** The open unsigned quote (owner only), so the payment can be resumed after leaving the page. */
+  pendingQuote?: { depositAddress: string; deadline: string; amountOutFormatted: string; intent: { standard: "nep413" | "erc191"; payload: unknown }; transfer: TransferView };
 };
 
 type Raw = {
@@ -78,6 +80,7 @@ const BILL_SLIPPAGE_BPS = 100;
 const isRec = (v: unknown): v is Rec => typeof v === "object" && v !== null && !Array.isArray(v);
 const notFound = () => new HttpError(404, "Bill not found");
 const vendorGone = () => new HttpError(409, "The vendor invoice is no longer payable");
+const duplicateBill = () => new HttpError(409, "You already have an open bill for this invoice");
 const linkError = () => new HttpError(400, "Paste a Manexus invoice link");
 const text = (v: unknown, max: number): v is string => typeof v === "string" && v.length <= max && !/[\u0000-\u001f\u007f]/.test(v);
 
@@ -229,17 +232,23 @@ export async function createBill(deps: { db: Db; now: Date } & Tokens, user: Use
       .prepare("SELECT id FROM bills WHERE owner = ? AND vendor_public_id = ? AND status != 'cancelled'")
       .bind(user.account, f.vendorPublicId)
       .first<{ id: string }>();
-    if (open) throw new HttpError(409, "You already have a bill for this invoice.");
+    if (open) throw duplicateBill();
   }
   const id = crypto.randomUUID();
   const ts = now.toISOString();
-  await db
+  const insert = db
     .prepare(
       `INSERT INTO bills (id, owner, vendor, reference, due_date, destination_asset, recipient_type, recipient, amount, source, vendor_public_id, status, deposit_address, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'scheduled', NULL, ?, ?)`,
     )
-    .bind(id, user.account, f.vendor, f.reference, f.dueDate, f.destinationAsset, f.recipientType, f.recipient, f.amount, f.source, f.vendorPublicId ?? null, ts, ts)
-    .run();
+    .bind(id, user.account, f.vendor, f.reference, f.dueDate, f.destinationAsset, f.recipientType, f.recipient, f.amount, f.source, f.vendorPublicId ?? null, ts, ts);
+  try {
+    await insert.run();
+  } catch (e) {
+    // bills_open_vendor: a concurrent import of the same invoice won.
+    if (f.vendorPublicId && /UNIQUE/i.test(String((e as Error)?.message))) throw duplicateBill();
+    throw e;
+  }
   return getBill(db, user.account, id);
 }
 
@@ -282,7 +291,12 @@ async function unsignedForGood(deps: TransferDeps, user: User, t: TransferView):
   } catch {
     /* keep attempted */
   }
-  return !attempted || deps.now.getTime() > new Date(t.deadline).getTime() + SUBMIT_GRACE_MS;
+  if (!attempted) return true;
+  // A relay was attempted and may have landed. Only a successful 1Click check made after the grace period
+  // (refreshTransfer's hold path writes updated_at on each one; errors and throttled reads do not) proves
+  // it did not. Otherwise the bill stays paying.
+  const graceEnd = new Date(t.deadline).getTime() + SUBMIT_GRACE_MS;
+  return !t.refreshError && deps.now.getTime() > graceEnd && new Date(t.updatedAt).getTime() > graceEnd;
 }
 
 /** Refresh the bill's latest transfer and move a paying bill to paid or back to scheduled (guarded). */
@@ -399,6 +413,17 @@ export async function refreshBill(deps: TransferDeps, user: User, id: string): P
       }
     }
   }
+  let pendingQuote: BillDetail["pendingQuote"];
+  if (bill.status === "paying" && transfer?.status === "AWAITING_SIGNATURE" && !transfer.expired) {
+    const r = await deps.db.prepare("SELECT intent FROM withdrawals WHERE deposit_address = ? AND owner = ?").bind(transfer.depositAddress, user.account).first<{ intent: string | null }>();
+    try {
+      const s: unknown = JSON.parse(r?.intent ?? "null");
+      if (isRec(s) && (s.standard === "nep413" || s.standard === "erc191"))
+        pendingQuote = { depositAddress: transfer.depositAddress, deadline: transfer.deadline, amountOutFormatted: transfer.amountOutFormatted, intent: { standard: s.standard, payload: s.payload }, transfer };
+    } catch {
+      /* no resumable quote */
+    }
+  }
   const tokens = await deps.oneclick.tokens().catch(() => [] as OneClickToken[]);
   const [view] = billViews([bill], tokens, deps.now);
   return {
@@ -408,5 +433,6 @@ export async function refreshBill(deps: TransferDeps, user: User, id: string): P
     ...(vendorOutcome ? { vendorOutcome } : {}),
     extraPayment: bill.status === "paid" && (vendorOutcome === "duplicate" || vendorOutcome === "after_cancel"),
     ...(refreshError ? { refreshError } : {}),
+    ...(pendingQuote ? { pendingQuote } : {}),
   };
 }

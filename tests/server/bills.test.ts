@@ -459,3 +459,55 @@ test("a concurrent quote that loses the scheduled → paying race leaves nothing
   assert.deepEqual(await withdrawals(db), []);
   assert.deepEqual(await listAttempts(db, inv.id), []);
 });
+
+test("after a failed relay, the bill is rescheduled only once 1Click was actually consulted past the grace period", async () => {
+  const db = createTestDb();
+  const f = fakes();
+  const b = await createBill(deps(db, f), ALICE, manual());
+  const qt = await quoteBillPayment(deps(db, f), ALICE, b.id, { originAsset: USDC });
+  f.oneclick.submitIntent = async () => {
+    throw new Error("timeout");
+  };
+  await assert.rejects(submitTransfer(deps(db, f), ALICE, signed(qt)));
+  // A check before the grace period ended, then the throttled cache of it: still paying.
+  f.settle(qt.depositAddress, "PENDING_DEPOSIT");
+  assert.equal((await refreshBill(deps(db, f, new Date("2030-01-01T00:11:58.000Z")), ALICE, b.id)).status, "paying");
+  assert.equal((await refreshBill(deps(db, f, new Date("2030-01-01T00:12:01.000Z")), ALICE, b.id)).status, "paying");
+  // 1Click unreachable after the grace period: no proof the relay did not land → stay paying.
+  const real = f.oneclick.status;
+  f.oneclick.status = async () => {
+    throw new Error("down");
+  };
+  const down = await refreshBill(deps(db, f, new Date("2030-01-01T00:13:00.000Z")), ALICE, b.id);
+  assert.equal(down.status, "paying");
+  assert.ok(down.refreshError);
+  f.oneclick.status = real;
+  // A real check after the grace period that has not seen the deposit → scheduled.
+  assert.equal((await refreshBill(deps(db, f, new Date("2030-01-01T00:14:00.000Z")), ALICE, b.id)).status, "scheduled");
+});
+
+test("concurrent imports of one vendor invoice create a single open bill", async () => {
+  const db = createTestDb();
+  const f = fakes();
+  const inv = await vendorInvoice(db);
+  const res = await Promise.allSettled([1, 2, 3].map(() => createBill(deps(db, f), ALICE, { source: "manexus", vendorPublicId: inv.publicId })));
+  assert.equal(res.filter((r) => r.status === "fulfilled").length, 1);
+  for (const r of res)
+    if (r.status === "rejected") assert.deepEqual([r.reason.status, r.reason.message], [409, "You already have an open bill for this invoice"]);
+  assert.equal((await listBills(db, ALICE.account)).length, 1);
+  // Once cancelled, the invoice can be imported again.
+  const [only] = await listBills(db, ALICE.account);
+  await cancelBill(deps(db, f), ALICE, only.id);
+  await createBill(deps(db, f), ALICE, { source: "manexus", vendorPublicId: inv.publicId });
+});
+
+test("a paying bill with an unsigned, unexpired quote exposes that intent to its owner for resuming", async () => {
+  const db = createTestDb();
+  const f = fakes();
+  const b = await createBill(deps(db, f), ALICE, manual());
+  const qt = await quoteBillPayment(deps(db, f), ALICE, b.id, { originAsset: USDC });
+  const v = await refreshBill(deps(db, f, LATER), ALICE, b.id);
+  assert.deepEqual(v.pendingQuote, { depositAddress: qt.depositAddress, deadline: qt.deadline, amountOutFormatted: qt.amountOutFormatted, intent: qt.intent, transfer: v.transfer });
+  const expired = await refreshBill(deps(db, f, new Date("2030-01-01T00:10:30.000Z")), ALICE, b.id);
+  assert.equal(expired.pendingQuote, undefined);
+});

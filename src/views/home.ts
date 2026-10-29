@@ -116,7 +116,7 @@ export function mountHome(el: HTMLElement): () => void {
       if (!alive) return;
       const p = payables(bills);
       q("#home-pay").innerHTML = !p.count
-        ? `<p class="muted">No bills yet</p>`
+        ? `<p class="muted">No scheduled bills</p>`
         : p.due
           ? `<p class="home-total">${p.totals.map(esc).join(" + ") || "—"}</p><p class="muted">${p.due} ${p.due === 1 ? "bill" : "bills"} due in the next 14 days · ${p.overdue} overdue</p><p class="fine"><a href="#/bills">View bills</a></p>`
           : `<p class="muted">Nothing due in the next 14 days.</p><p class="fine"><a href="#/bills">View bills</a></p>`;

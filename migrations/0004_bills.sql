@@ -20,3 +20,5 @@ CREATE TABLE bills (
   updated_at TEXT NOT NULL
 );
 CREATE INDEX bills_owner_status_due ON bills(owner, status, due_date);
+-- At most one open (not cancelled) bill per owner and imported vendor invoice, even under concurrent imports.
+CREATE UNIQUE INDEX bills_open_vendor ON bills(owner, vendor_public_id) WHERE vendor_public_id IS NOT NULL AND status != 'cancelled';

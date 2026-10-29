@@ -35,7 +35,7 @@ test("dashboard tiles, escaped activity feed and links", async ({ page }) => {
   const calls = await mock(page);
   await page.goto("/#/");
   await expect(page.locator("#home-total")).toContainText("$2.50");
-  await expect(page.locator("#home-pay")).toContainText("No bills yet");
+  await expect(page.locator("#home-pay")).toContainText("No scheduled bills");
   expect(calls).toContain("/api/bills?status=scheduled");
   await expect(page.locator("#home-month")).toContainText("received 3.5");
   await expect(page.locator("#home-month")).toContainText("sent 0.4");
@@ -54,7 +54,7 @@ test("an activity failure does not blank the other tiles", async ({ page }) => {
   await expect(page.locator("#home-activity")).toContainText("Upstream down");
   await expect(page.locator("#home-total")).toContainText("$2.50");
   await expect(page.locator("#home-cards")).toContainText("2.5 USDC");
-  await expect(page.locator("#home-pay")).toContainText("No bills yet");
+  await expect(page.locator("#home-pay")).toContainText("No scheduled bills");
 });
 
 test("a month failure leaves the feed visible", async ({ page }) => {
