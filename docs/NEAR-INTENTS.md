@@ -39,4 +39,4 @@ Base URL: `https://1click.chaindefuser.com`. RPC: `https://rpc.mainnet.fastnear.
 ## Concerns
 
 - A named NEAR account with no registered key can receive funds but cannot sign withdrawals; the owner flow must check `has_public_key` and register first.
-- Quote fees were inflated by the absence of an API key (amountIn 1010180 for 1000000 out).
+- Unauthenticated requests incur an extra 0.25% platform fee per the 1Click docs; the recorded quote's exact fee breakdown (amountIn 1010180 for 1000000 out) was not analysed.
