@@ -21,9 +21,13 @@ const MAX_TOKENS = 50;
 async function tokenIds(db: Db, account: string): Promise<string[]> {
   const { results } = await db
     .prepare(
-      `SELECT token_id AS id FROM invoices WHERE owner = ? UNION SELECT origin_asset AS id FROM withdrawals WHERE owner = ? ORDER BY id LIMIT ?`,
+      // Swaps are the only transfers that deliver into the owner's own Intents account.
+      `SELECT token_id AS id FROM invoices WHERE owner = ?
+       UNION SELECT origin_asset AS id FROM withdrawals WHERE owner = ?
+       UNION SELECT destination_asset AS id FROM withdrawals WHERE owner = ? AND kind = 'swap'
+       ORDER BY id LIMIT ?`,
     )
-    .bind(account, account, MAX_TOKENS)
+    .bind(account, account, account, MAX_TOKENS)
     .all<{ id: string }>();
   const ids = new Set(SETTLEMENT_TOKENS.map((t) => t.tokenId));
   for (const r of results) if (ids.size < MAX_TOKENS) ids.add(r.id);

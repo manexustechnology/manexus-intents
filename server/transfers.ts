@@ -1,48 +1,79 @@
-// Withdrawals from the owner's own intents.near balance to any supported chain.
-// The server never signs: it asks 1Click for a quote and an unsigned intent, stores that exact intent,
-// and later relays the owner's wallet signature over it. Every check fails closed.
-import { supportedChain, validDestination } from "../shared/address.ts";
+// Outbound transfers from the owner's own intents.near balance: withdrawals, swaps, bill payments and
+// payroll lines. The server never signs: it asks 1Click for a quote and an unsigned intent, stores that
+// exact intent, and later relays the owner's wallet signature over it. Every check fails closed.
+// Rows live in the `withdrawals` table (migration 0003 adds kind/reference/batch_id/bill_id).
+import { supportedChain, validDestination, validIntentsAccount } from "../shared/address.ts";
 import { ED25519_KEY, ed25519KeyBytes, nonceBytes } from "../shared/intent-sign.ts";
 import { formatAmount } from "../shared/units.ts";
 import { base58 } from "@scure/base";
-import { getBalances } from "./balances.ts";
+import { getBalances, type Balance } from "./balances.ts";
 import type { Db } from "./db.ts";
 import { HttpError } from "./http.ts";
 import type { NearRpc } from "./near-rpc.ts";
-import type { OneClickToken, QuoteRequest, SwapStatus, createOneClick } from "./oneclick.ts";
+import type { OneClickToken, Quote, QuoteRequest, SwapStatus, createOneClick } from "./oneclick.ts";
 
 type User = { account: string; kind: "near" | "evm" };
 type Standard = "nep413" | "erc191";
 type OneClick = Pick<ReturnType<typeof createOneClick>, "tokens" | "quote" | "generateIntent" | "submitIntent" | "status">;
-export type WithdrawDeps = { db: Db; oneclick: OneClick; rpc: NearRpc; now: Date };
+export type TransferDeps = { db: Db; oneclick: OneClick; rpc: NearRpc; now: Date };
+
+export const TRANSFER_KINDS = ["withdraw", "swap", "bill", "payroll"] as const;
+export type TransferKind = (typeof TRANSFER_KINDS)[number];
+export type SwapType = "EXACT_INPUT" | "EXACT_OUTPUT";
+export type RecipientType = "DESTINATION_CHAIN" | "INTENTS";
+export const SLIPPAGE_BPS = [50, 100, 300] as const;
+
+/**
+ * What to send. `amount` is in base units: of the origin asset for EXACT_INPUT, of the destination
+ * asset (what the recipient receives) for EXACT_OUTPUT.
+ */
+export type TransferRequest = {
+  kind: TransferKind;
+  originAsset: string;
+  destinationAsset: string;
+  amount: string;
+  swapType: SwapType;
+  recipientType: RecipientType;
+  recipient: string;
+  slippageBps?: (typeof SLIPPAGE_BPS)[number];
+  reference?: string;
+  batchId?: string;
+  billId?: string;
+};
 
 type Meta = {
   originSymbol: string; originDecimals: number;
   destinationSymbol: string; destinationBlockchain: string; destinationDecimals: number;
   amountOut: string; minAmountOut: string;
+  // Absent on Plan 1 rows, which were all EXACT_INPUT to a destination chain.
+  swapType?: SwapType; recipientType?: RecipientType;
 };
 type StoredIntent = { standard: Standard; payload: unknown; deadline: string; meta: Meta };
 
-export type WithdrawalStatus = "AWAITING_SIGNATURE" | SwapStatus["status"];
+export type TransferStatus = "AWAITING_SIGNATURE" | SwapStatus["status"];
 
-export type WithdrawalView = {
+export type TransferView = {
   depositAddress: string;
   originAsset: string; originSymbol: string; amount: string; amountFormatted: string;
   destinationAsset: string; destinationSymbol: string; destinationBlockchain: string; recipient: string;
   amountOut: string; amountOutFormatted: string; minAmountOut: string; minAmountOutFormatted: string;
-  status: WithdrawalStatus; intentHash?: string; destinationTxHashes: string[];
+  status: TransferStatus; intentHash?: string; destinationTxHashes: string[];
   deadline: string; expired: boolean; expiredUnsubmitted?: boolean; createdAt: string; updatedAt: string; refreshError?: string;
+  kind: TransferKind; swapType: SwapType; recipientType: RecipientType; reference?: string; batchId?: string; billId?: string;
 };
 
-export type WithdrawalQuote = {
+export type TransferQuote = {
   depositAddress: string; amountOut: string; amountOutFormatted: string; minAmountOut: string; deadline: string;
   intent: { standard: Standard; payload: unknown };
-  withdrawal: WithdrawalView;
+  transfer: TransferView;
+  /** Same as `transfer`; kept for the Plan 1 withdraw route and view. */
+  withdrawal: TransferView;
 };
 
 type Raw = {
   deposit_address: string; owner: string; origin_asset: string; destination_asset: string; amount: string; recipient: string;
   intent_hash: string | null; status: string; upstream: string | null; intent: string | null; created_at: string; updated_at: string;
+  kind: TransferKind; reference: string | null; batch_id: string | null; bill_id: string | null;
 };
 
 const QUOTE_MINUTES = 10;
@@ -52,10 +83,13 @@ const STUCK_SUBMIT_MS = 120_000;
 const TERMINAL = new Set(["SUCCESS", "REFUNDED", "FAILED"]);
 const DIGITS = /^[1-9][0-9]{0,77}$/;
 const INTENTS = "intents.near";
+const MAX_REFERENCE = 200;
+const MAX_ID = 100;
+const NOUN: Record<TransferKind, string> = { withdraw: "withdrawal", swap: "swap", bill: "payment", payroll: "payment" };
 
 type Rec = Record<string, unknown>;
 const isRec = (v: unknown): v is Rec => typeof v === "object" && v !== null && !Array.isArray(v);
-const badIntent = () => new HttpError(502, "NEAR Intents returned an unexpected withdrawal intent");
+const badIntent = (kind: TransferKind) => new HttpError(502, `NEAR Intents returned an unexpected ${NOUN[kind]} intent`);
 const parseJson = (s: unknown): unknown => {
   if (typeof s !== "string") return undefined;
   try {
@@ -99,19 +133,22 @@ function intentBody(standard: string, payload: unknown): Rec | null {
  * The generated intent must do exactly one thing: transfer `amount` of `originAsset` from the owner's
  * Intents account to the quote's deposit address, signed as the owner, and not yet expired.
  */
-function checkGeneratedIntent(user: User, standard: Standard, payload: unknown, w: { depositAddress: string; originAsset: string; amount: string; now: Date }): number {
+function checkGeneratedIntent(
+  user: User, standard: Standard, payload: unknown, w: { kind: TransferKind; depositAddress: string; originAsset: string; amount: string; now: Date },
+): number {
+  const bad = () => badIntent(w.kind);
   const body = intentBody(standard, payload);
-  if (!body || !sameSigner(user, body.signer_id)) throw badIntent();
+  if (!body || !sameSigner(user, body.signer_id)) throw bad();
   const deadline = time(body.deadline);
-  if (!(deadline > w.now.getTime())) throw badIntent();
+  if (!(deadline > w.now.getTime())) throw bad();
   const list = body.intents;
-  if (!Array.isArray(list) || list.length !== 1) throw badIntent();
+  if (!Array.isArray(list) || list.length !== 1) throw bad();
   const it = list[0];
-  if (!isRec(it) || Object.keys(it).some((k) => !["intent", "receiver_id", "tokens", "memo"].includes(k))) throw badIntent();
-  if (it.intent !== "transfer" || it.receiver_id !== w.depositAddress || !isRec(it.tokens)) throw badIntent();
+  if (!isRec(it) || Object.keys(it).some((k) => !["intent", "receiver_id", "tokens", "memo"].includes(k))) throw bad();
+  if (it.intent !== "transfer" || it.receiver_id !== w.depositAddress || !isRec(it.tokens)) throw bad();
   const tokens = Object.entries(it.tokens);
-  if (tokens.length !== 1 || tokens[0][0] !== w.originAsset || tokens[0][1] !== w.amount) throw badIntent();
-  if (it.memo !== undefined && typeof it.memo !== "string") throw badIntent();
+  if (tokens.length !== 1 || tokens[0][0] !== w.originAsset || tokens[0][1] !== w.amount) throw bad();
+  if (it.memo !== undefined && typeof it.memo !== "string") throw bad();
   return deadline;
 }
 
@@ -127,7 +164,7 @@ function upstreamOf(r: Raw): Rec {
   return isRec(u) ? u : {};
 }
 
-function toView(r: Raw, now: Date): WithdrawalView {
+function toView(r: Raw, now: Date): TransferView {
   const s = stored(r);
   const m = s.meta;
   const u = upstreamOf(r);
@@ -140,55 +177,94 @@ function toView(r: Raw, now: Date): WithdrawalView {
     recipient: r.recipient,
     amountOut: m.amountOut, amountOutFormatted: formatAmount(BigInt(m.amountOut), m.destinationDecimals),
     minAmountOut: m.minAmountOut, minAmountOutFormatted: formatAmount(BigInt(m.minAmountOut), m.destinationDecimals),
-    status: r.status as WithdrawalStatus,
+    status: r.status as TransferStatus,
     ...(r.intent_hash ? { intentHash: r.intent_hash } : {}),
     destinationTxHashes: hashes,
     deadline: s.deadline,
     expired: r.status === "AWAITING_SIGNATURE" && time(s.deadline) <= now.getTime(),
     ...(r.status === "FAILED" && u.stuckSubmit === true ? { expiredUnsubmitted: true } : {}),
     createdAt: r.created_at, updatedAt: r.updated_at,
+    kind: r.kind,
+    swapType: m.swapType ?? "EXACT_INPUT",
+    recipientType: m.recipientType ?? "DESTINATION_CHAIN",
+    ...(r.reference != null ? { reference: r.reference } : {}),
+    ...(r.batch_id != null ? { batchId: r.batch_id } : {}),
+    ...(r.bill_id != null ? { billId: r.bill_id } : {}),
   };
 }
 
 async function load(db: Db, user: User, depositAddress: unknown): Promise<Raw> {
-  if (typeof depositAddress !== "string" || !depositAddress || depositAddress.length > 200) throw new HttpError(404, "Withdrawal not found");
+  if (typeof depositAddress !== "string" || !depositAddress || depositAddress.length > 200) throw new HttpError(404, "Transfer not found");
   const r = await db.prepare("SELECT * FROM withdrawals WHERE deposit_address = ? AND owner = ?").bind(depositAddress, user.account).first<Raw>();
-  if (!r) throw new HttpError(404, "Withdrawal not found");
+  if (!r) throw new HttpError(404, "Transfer not found");
   return { ...r };
 }
 
-export async function quoteWithdrawal(
-  deps: WithdrawDeps,
-  user: User,
-  body: { originAsset: string; amount: string; destinationAsset: string; recipient: string },
-): Promise<WithdrawalQuote> {
+/** A request that passed every check that does not need the quote, plus the 1Click quote request for it. */
+type Checked = {
+  kind: TransferKind; swapType: SwapType; recipientType: RecipientType;
+  amount: string; recipient: string; reference: string | null; batchId: string | null; billId: string | null;
+  held: Balance; dest: OneClickToken; request: QuoteRequest;
+};
+
+const ID = /^[A-Za-z0-9_-]{1,100}$/;
+
+function optionalId(v: unknown, what: string): string | null {
+  if (v === undefined || v === null) return null;
+  if (typeof v !== "string" || v.length > MAX_ID || !ID.test(v)) throw new HttpError(400, `Invalid ${what}.`);
+  return v;
+}
+
+/** Everything about `input` that can be checked before asking 1Click: shape, balance, destination, recipient, rate limit. */
+async function checkRequest(deps: TransferDeps, user: User, input: TransferRequest): Promise<Checked> {
   const { db, oneclick, rpc, now } = deps;
-  const b = (isRec(body) ? body : {}) as Rec;
+  const b = (isRec(input) ? input : {}) as Rec;
+  if (!(TRANSFER_KINDS as readonly unknown[]).includes(b.kind)) throw new HttpError(400, "Unknown transfer type.");
+  const kind = b.kind as TransferKind;
+  if (b.swapType !== "EXACT_INPUT" && b.swapType !== "EXACT_OUTPUT") throw new HttpError(400, "Unknown swap type.");
+  if (b.recipientType !== "DESTINATION_CHAIN" && b.recipientType !== "INTENTS") throw new HttpError(400, "Unknown recipient type.");
+  const swapType: SwapType = b.swapType, recipientType: RecipientType = b.recipientType;
+  const slippage = b.slippageBps === undefined ? 100 : b.slippageBps;
+  if (!(SLIPPAGE_BPS as readonly unknown[]).includes(slippage)) throw new HttpError(400, "Choose a slippage of 0.5%, 1% or 3%.");
+  let reference: string | null = null;
+  if (b.reference !== undefined && b.reference !== null) {
+    if (typeof b.reference !== "string" || b.reference.length > MAX_REFERENCE) throw new HttpError(400, `Keep the reference under ${MAX_REFERENCE} characters.`);
+    reference = b.reference.trim() || null;
+  }
+  const batchId = optionalId(b.batchId, "batch");
+  const billId = optionalId(b.billId, "bill");
   if (typeof b.originAsset !== "string" || typeof b.destinationAsset !== "string" || typeof b.recipient !== "string")
     throw new HttpError(400, "Choose a token, destination and address.");
   if (typeof b.amount !== "string" || !DIGITS.test(b.amount)) throw new HttpError(400, "Enter a valid positive amount.");
   const amount = b.amount;
   const recipient = b.recipient.trim();
 
+  // The origin must be a token the owner holds. EXACT_INPUT sends `amount` of it; for EXACT_OUTPUT the
+  // amount sent is only known from the quote and is checked against this balance there.
   const balances = await getBalances({ db, rpc, oneclick }, user.account);
   const held = balances.find((x) => x.tokenId === b.originAsset);
-  if (!held || BigInt(amount) > BigInt(held.amount)) throw new HttpError(400, "Amount exceeds your balance");
+  if (!held || (swapType === "EXACT_INPUT" && BigInt(amount) > BigInt(held.amount))) throw new HttpError(400, "Amount exceeds your balance");
 
   const tokens: OneClickToken[] = await oneclick.tokens();
   const dest = tokens.find((t) => t.assetId === b.destinationAsset);
-  if (!dest || !supportedChain(dest.blockchain)) throw new HttpError(400, "That destination token is not supported.");
-  if (!validDestination(dest.blockchain, recipient)) throw new HttpError(400, `Enter a valid ${dest.blockchain} address.`);
+  if (recipientType === "DESTINATION_CHAIN") {
+    if (!dest || !supportedChain(dest.blockchain)) throw new HttpError(400, "That destination token is not supported.");
+    if (!validDestination(dest.blockchain, recipient)) throw new HttpError(400, `Enter a valid ${dest.blockchain} address.`);
+  } else {
+    if (!dest) throw new HttpError(400, "That destination token is not supported.");
+    if (!validIntentsAccount(recipient)) throw new HttpError(400, "Enter a valid NEAR account or lowercase 0x address.");
+  }
 
   const open = await db
     .prepare("SELECT COUNT(*) AS n FROM withdrawals WHERE owner = ? AND status = 'AWAITING_SIGNATURE' AND created_at > ?")
     .bind(user.account, new Date(now.getTime() - 3_600_000).toISOString())
     .first<{ n: number }>();
-  if ((open?.n ?? 0) >= MAX_OPEN_QUOTES_PER_HOUR) throw new HttpError(429, "Too many withdrawal quotes. Try again later.");
+  if ((open?.n ?? 0) >= MAX_OPEN_QUOTES_PER_HOUR) throw new HttpError(429, `Too many ${NOUN[kind]} quotes. Try again later.`);
 
   const request: QuoteRequest = {
     dry: false,
-    swapType: "EXACT_INPUT",
-    slippageTolerance: 100,
+    swapType,
+    slippageTolerance: slippage as number,
     originAsset: held.tokenId,
     depositType: "INTENTS",
     destinationAsset: dest.assetId,
@@ -196,38 +272,58 @@ export async function quoteWithdrawal(
     refundTo: user.account,
     refundType: "INTENTS",
     recipient,
-    recipientType: "DESTINATION_CHAIN",
+    recipientType,
     deadline: new Date(now.getTime() + QUOTE_MINUTES * 60_000).toISOString(),
     referral: "manexus",
   };
-  const q = await oneclick.quote(request);
+  return { kind, swapType, recipientType, amount, recipient, reference, batchId, billId, held, dest, request };
+}
+
+/** Check the 1Click quote against the request and the balance, fetch and check the unsigned intent, store the row. */
+async function prepareChecked(deps: TransferDeps, user: User, c: Checked, q: Quote): Promise<TransferQuote> {
+  const { db, oneclick, now } = deps;
   const quoteDeadline = time(q.deadline);
   if (
-    !q.depositAddress || q.depositAddress.length > 200 || q.amountIn !== amount ||
+    !isRec(q) || typeof q.depositAddress !== "string" || !q.depositAddress || q.depositAddress.length > 200 ||
+    typeof q.amountIn !== "string" || typeof q.amountOut !== "string" || typeof q.minAmountOut !== "string" ||
     !DIGITS.test(q.amountOut) || !/^[0-9]{1,78}$/.test(q.minAmountOut) || BigInt(q.minAmountOut) > BigInt(q.amountOut) ||
     !(quoteDeadline > now.getTime())
   )
     throw new HttpError(502, "NEAR Intents returned an unexpected response");
+  // What the intent transfers out of the owner's account.
+  let sent: string;
+  if (c.swapType === "EXACT_INPUT") {
+    if (q.amountIn !== c.amount) throw new HttpError(502, "NEAR Intents returned an unexpected response");
+    sent = c.amount;
+  } else {
+    if (!DIGITS.test(q.amountIn)) throw new HttpError(502, "NEAR Intents returned an unexpected response");
+    if (BigInt(q.amountIn) > BigInt(c.held.amount)) throw new HttpError(400, "Amount exceeds your balance");
+    if (BigInt(q.amountOut) < BigInt(c.amount)) throw new HttpError(502, "NEAR Intents returned an unexpected response");
+    sent = q.amountIn;
+  }
 
   const standard: Standard = user.kind === "near" ? "nep413" : "erc191";
   const intent = await oneclick.generateIntent({ depositAddress: q.depositAddress, signerId: user.account, standard });
-  if (intent.standard !== standard) throw badIntent();
-  const intentDeadline = checkGeneratedIntent(user, standard, intent.payload, { depositAddress: q.depositAddress, originAsset: held.tokenId, amount, now });
+  if (intent.standard !== standard) throw badIntent(c.kind);
+  const intentDeadline = checkGeneratedIntent(user, standard, intent.payload, {
+    kind: c.kind, depositAddress: q.depositAddress, originAsset: c.held.tokenId, amount: sent, now,
+  });
 
   const deadline = new Date(Math.min(quoteDeadline, intentDeadline)).toISOString();
   const meta: Meta = {
-    originSymbol: held.symbol, originDecimals: held.decimals,
-    destinationSymbol: dest.symbol, destinationBlockchain: dest.blockchain, destinationDecimals: dest.decimals,
+    originSymbol: c.held.symbol, originDecimals: c.held.decimals,
+    destinationSymbol: c.dest.symbol, destinationBlockchain: c.dest.blockchain, destinationDecimals: c.dest.decimals,
     amountOut: q.amountOut, minAmountOut: q.minAmountOut,
+    swapType: c.swapType, recipientType: c.recipientType,
   };
   const record: StoredIntent = { standard, payload: intent.payload, deadline, meta };
   const ts = now.toISOString();
   const ins = await db
     .prepare(
-      `INSERT INTO withdrawals (deposit_address, owner, origin_asset, destination_asset, amount, recipient, intent_hash, status, upstream, intent, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, NULL, 'AWAITING_SIGNATURE', NULL, ?, ?, ?) ON CONFLICT(deposit_address) DO NOTHING`,
+      `INSERT INTO withdrawals (deposit_address, owner, origin_asset, destination_asset, amount, recipient, intent_hash, status, upstream, intent, created_at, updated_at, kind, reference, batch_id, bill_id)
+       VALUES (?, ?, ?, ?, ?, ?, NULL, 'AWAITING_SIGNATURE', NULL, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(deposit_address) DO NOTHING`,
     )
-    .bind(q.depositAddress, user.account, held.tokenId, dest.assetId, amount, recipient, JSON.stringify(record), ts, ts)
+    .bind(q.depositAddress, user.account, c.held.tokenId, c.dest.assetId, sent, c.recipient, JSON.stringify(record), ts, ts, c.kind, c.reference, c.batchId, c.billId)
     .run();
   if (ins.meta.changes !== 1) throw new HttpError(502, "NEAR Intents returned a deposit address that is already in use");
 
@@ -239,8 +335,24 @@ export async function quoteWithdrawal(
     minAmountOut: q.minAmountOut,
     deadline,
     intent: { standard, payload: intent.payload },
+    transfer: view,
     withdrawal: view,
   };
+}
+
+/**
+ * Store a transfer for a 1Click quote the caller already obtained (for `req`, with depositType and
+ * refundType INTENTS and refundTo the owner). The request and the quote are checked exactly as in
+ * `quoteTransfer`.
+ */
+export async function prepareTransfer(deps: TransferDeps, user: User, req: TransferRequest, q: Quote): Promise<TransferQuote> {
+  return prepareChecked(deps, user, await checkRequest(deps, user, req), q);
+}
+
+/** Quote `req` with 1Click and store the unsigned intent the owner must sign. */
+export async function quoteTransfer(deps: TransferDeps, user: User, req: TransferRequest): Promise<TransferQuote> {
+  const c = await checkRequest(deps, user, req);
+  return prepareChecked(deps, user, c, await deps.oneclick.quote(c.request));
 }
 
 /** The signature part of signedData, validated for the stored standard. Throws 400 if malformed. */
@@ -277,16 +389,17 @@ function signatureFields(standard: Standard, sd: Rec): { public_key?: string; si
  * payload (same nonce) can be retried, and intents.near rejects a nonce it has already executed,
  * so a retry can never move funds twice. A recorded attempt keeps the row visible and refreshable.
  */
-export async function submitWithdrawal(deps: WithdrawDeps, user: User, body: { depositAddress: string; signedData: unknown }): Promise<WithdrawalView> {
+export async function submitTransfer(deps: TransferDeps, user: User, body: { depositAddress: string; signedData: unknown }): Promise<TransferView> {
   const { db, oneclick, now } = deps;
   const sd = isRec(body) ? body.signedData : undefined;
   if (!isRec(sd) || typeof sd.standard !== "string") throw new HttpError(400, "Invalid signature");
   const row = await load(db, user, (body as Rec).depositAddress);
-  if (row.status !== "AWAITING_SIGNATURE") throw new HttpError(409, "This withdrawal was already submitted");
+  const noun = NOUN[row.kind] ?? "transfer";
+  if (row.status !== "AWAITING_SIGNATURE") throw new HttpError(409, `This ${noun} was already submitted`);
   const s = stored(row);
   if (!(time(s.deadline) > now.getTime())) throw new HttpError(409, "Quote expired, request a new one");
-  if (sd.standard !== s.standard) throw new HttpError(403, "Signature does not match this withdrawal");
-  if (!deepEqual(sd.payload, s.payload)) throw new HttpError(403, "Signed intent does not match this withdrawal");
+  if (sd.standard !== s.standard) throw new HttpError(403, `Signature does not match this ${noun}`);
+  if (!deepEqual(sd.payload, s.payload)) throw new HttpError(403, `Signed intent does not match this ${noun}`);
   if (!sameSigner(user, intentBody(s.standard, s.payload)?.signer_id)) throw new HttpError(403, "Signed intent is not for your account");
   const sig = signatureFields(s.standard, sd);
   const signedData = { standard: s.standard, payload: s.payload, ...sig };
@@ -296,7 +409,7 @@ export async function submitWithdrawal(deps: WithdrawDeps, user: User, body: { d
     .prepare("UPDATE withdrawals SET status = 'PROCESSING', updated_at = ? WHERE deposit_address = ? AND owner = ? AND status = 'AWAITING_SIGNATURE'")
     .bind(ts, row.deposit_address, user.account)
     .run();
-  if (claim.meta.changes !== 1) throw new HttpError(409, "This withdrawal was already submitted");
+  if (claim.meta.changes !== 1) throw new HttpError(409, `This ${noun} was already submitted`);
 
   let intentHash: string;
   try {
@@ -332,7 +445,7 @@ function trimmed(s: SwapStatus): string {
 }
 
 /** Current status from 1Click. Upstream errors return the stored state with `refreshError`. */
-export async function refreshWithdrawal(deps: WithdrawDeps, user: User, depositAddress: string): Promise<WithdrawalView> {
+export async function refreshTransfer(deps: TransferDeps, user: User, depositAddress: string): Promise<TransferView> {
   const { db, oneclick, now } = deps;
   const row = await load(db, user, depositAddress);
   const attempted = row.status !== "AWAITING_SIGNATURE" || upstreamOf(row).submitAttemptedAt !== undefined;
@@ -369,13 +482,21 @@ export async function refreshWithdrawal(deps: WithdrawDeps, user: User, depositA
   return toView(await load(db, user, row.deposit_address), now);
 }
 
-/** History: everything that was ever submitted (unsigned quotes moved no funds and are hidden). */
-export async function listWithdrawals(deps: Pick<WithdrawDeps, "db" | "now">, user: User): Promise<WithdrawalView[]> {
+/** Valid `?kind=` filter value, or 400. Undefined/empty means every kind. */
+export function parseKind(v: unknown): TransferKind | undefined {
+  if (v === undefined || v === null || v === "") return undefined;
+  if (!(TRANSFER_KINDS as readonly unknown[]).includes(v)) throw new HttpError(400, "Unknown transfer type.");
+  return v as TransferKind;
+}
+
+/** History: everything that was ever submitted (unsigned quotes moved no funds and are hidden), optionally of one kind. */
+export async function listTransfers(deps: Pick<TransferDeps, "db" | "now">, user: User, kind?: TransferKind): Promise<TransferView[]> {
+  const k = parseKind(kind);
   const { results } = await deps.db
     .prepare(
-      "SELECT * FROM withdrawals WHERE owner = ? AND (status != 'AWAITING_SIGNATURE' OR upstream IS NOT NULL) ORDER BY created_at DESC, deposit_address LIMIT 50",
+      `SELECT * FROM withdrawals WHERE owner = ?${k ? " AND kind = ?" : ""} AND (status != 'AWAITING_SIGNATURE' OR upstream IS NOT NULL) ORDER BY created_at DESC, deposit_address LIMIT 50`,
     )
-    .bind(user.account)
+    .bind(...(k ? [user.account, k] : [user.account]))
     .all<Raw>();
   return results.map((r) => toView({ ...r }, deps.now));
 }
