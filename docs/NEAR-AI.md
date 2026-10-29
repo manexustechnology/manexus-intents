@@ -1,7 +1,7 @@
 # NEAR AI Cloud facts (spike, 2026-10-30)
 
 OpenAI-compatible gateway used only to draft policy JSON from owner text and write short summaries.
-Re-run `node scripts/spike-nearai.ts` to refresh. No secrets here.
+Re-run `node scripts/spike-nearai.ts` to refresh (Node >= 22.18 runs .ts directly). The script always GETs `/models`; it POSTs one tiny chat completion (twice: plain and `json_object`) only when `NEAR_AI_API_KEY` is set. No secrets here.
 
 | Fact | Value | Verified how |
 |---|---|---|
