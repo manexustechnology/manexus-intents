@@ -14,7 +14,20 @@ export function totalLabel(inv: InvoiceRow): string {
 
 export function statusChip(inv: InvoiceRow): string {
   const s = displayStatus(inv.status, inv.data.dueDate);
-  return `<span class="badge status-${s}">${esc(STATUS_LABEL[s])}</span>`;
+  const title = s === "paid" && inv.paidAt ? ` title="Verified on NEAR Intents ${esc(inv.paidAt.slice(0, 10))}"` : "";
+  return `<span class="badge status-${s}"${title}>${s === "paid" ? "✓ " : ""}${esc(STATUS_LABEL[s])}</span>`;
+}
+
+const NEAR_TX = /^[1-9A-HJ-NP-Za-km-z]{43,44}$/;
+/** NEAR transaction hashes as NearBlocks links; anything that is not a NEAR hash is shown as plain text. */
+export function txLinks(hashes: string[]): string {
+  return hashes
+    .map((h) =>
+      NEAR_TX.test(h)
+        ? `<a href="https://nearblocks.io/txns/${encodeURIComponent(h)}" target="_blank" rel="noopener noreferrer">${esc(h.slice(0, 8))}…</a>`
+        : `<code>${esc(h)}</code>`,
+    )
+    .join(" ");
 }
 
 export function mountInvoices(el: HTMLElement): () => void {

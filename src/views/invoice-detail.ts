@@ -3,7 +3,36 @@ import { invoiceTotal, type InvoiceDraft, type InvoiceRow } from "../../shared/i
 import { escapeHTML as esc } from "../../shared/text.ts";
 import { formatAmount, baseUnits } from "../../shared/units.ts";
 import { api, ApiError } from "../api.ts";
-import { statusChip, totalLabel } from "./invoices.ts";
+import { statusChip, totalLabel, txLinks } from "./invoices.ts";
+
+type Payment = {
+  symbol: string; blockchain: string; depositAddress: string; originAsset: string; amountIn: string; amountInFormatted: string;
+  status: string; outcome?: string; expired: boolean; createdAt: string; refundTo: string;
+  originTxHashes: string[]; destinationTxHashes: string[]; amountOut?: string; amountOutFormatted?: string;
+};
+type Payments = { invoiceStatus: InvoiceRow["status"]; attempts: Payment[]; refreshError?: string };
+
+const OUTCOME_LABEL: Record<string, string> = {
+  paid: "Paid", duplicate: "Extra payment", after_cancel: "Paid after cancel", refunded: "Refunded", failed: "Failed",
+};
+
+export function paymentsHtml(p: Payments, symbol: string): string {
+  const rows = p.attempts.map((a) => {
+    const badge = a.outcome
+      ? `<span class="badge outcome-${esc(a.outcome)}">${esc(OUTCOME_LABEL[a.outcome] ?? a.outcome)}</span>`
+      : `<span class="badge">${esc(a.expired ? "Expired" : a.status.replaceAll("_", " ").toLowerCase())}</span>`;
+    const sent = a.amountInFormatted ? `${esc(a.amountInFormatted)} ${esc(a.symbol)} on ${esc(a.blockchain)}` : "Amount unavailable";
+    const extra = a.outcome === "duplicate" || a.outcome === "after_cancel" ? `<p class="fine">Extra payment received (in your balance)</p>` : "";
+    return `<div class="payment-row" data-deposit="${esc(a.depositAddress)}"><div>${badge} <strong>${sent}</strong> <span class="muted">${esc(a.createdAt.slice(0, 16).replace("T", " "))} UTC</span></div>${extra}${
+      a.amountOutFormatted && (a.outcome === "paid" || a.outcome === "duplicate" || a.outcome === "after_cancel") ? `<p class="fine">Received ${esc(a.amountOutFormatted)} ${esc(symbol)}</p>` : ""
+    }${a.destinationTxHashes.length ? `<p class="fine">Settlement: ${txLinks(a.destinationTxHashes)}</p>` : ""}${
+      a.originTxHashes.length ? `<p class="fine">Deposit tx: ${a.originTxHashes.map((h) => `<code>${esc(h)}</code>`).join(" ")}</p>` : ""
+    }</div>`;
+  });
+  return `<section class="panel" id="invoice-payments"><div class="section-title"><h2>Payments</h2></div>${p.refreshError ? `<p class="error" role="alert">${esc(p.refreshError)}</p>` : ""}${
+    rows.length ? `<div class="payment-list">${rows.join("")}</div>` : `<p class="empty">No payment attempts yet.</p>`
+  }</section>`;
+}
 
 const post = <T>(path: string, body?: unknown) => api<T>(path, { method: "POST", ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
 
@@ -129,7 +158,33 @@ export function mountInvoice(el: HTMLElement, params: Record<string, string>): (
     });
   }
 
-  function drawView() {
+  async function loadPayments(i: InvoiceRow) {
+    let p: Payments;
+    try {
+      p = await api<Payments>(`/api/invoices/${encodeURIComponent(i.id)}/payments`);
+    } catch (e) {
+      if (!alive || inv !== i) return;
+      const box = el.querySelector("#invoice-payments");
+      if (box) box.innerHTML = `<p class="error" role="alert">${esc(e instanceof Error ? e.message : "Could not load payments.")}</p>`;
+      return;
+    }
+    if (!alive || inv !== i) return;
+    if (p.invoiceStatus !== i.status) {
+      // Reconciliation changed the invoice (e.g. now paid): reload it so paid date and chip are current.
+      try {
+        inv = await api<InvoiceRow>(`/api/invoices/${encodeURIComponent(i.id)}`);
+      } catch {
+        /* keep the old row; payments are still shown */
+      }
+      if (!alive) return;
+      drawView(p);
+      return;
+    }
+    const box = el.querySelector("#invoice-payments");
+    if (box) box.outerHTML = paymentsHtml(p, settlementToken(i.tokenId).symbol);
+  }
+
+  function drawView(payments?: Payments) {
     const i = inv!;
     const link = `${location.origin}${location.pathname}#/pay/${encodeURIComponent(i.publicId)}`;
     el.innerHTML =
@@ -140,7 +195,13 @@ export function mountInvoice(el: HTMLElement, params: Record<string, string>): (
           : i.status === "cancelled"
             ? `<p class="fine">This invoice was cancelled. Its payment link no longer accepts payment.</p>`
             : ""
-      }<p class="error" id="invoice-error" role="alert"></p><div class="invoice-actions"><button class="textbutton" id="invoice-duplicate">Duplicate as new draft</button></div></article>`;
+      }<p class="error" id="invoice-error" role="alert"></p><div class="invoice-actions"><button class="textbutton" id="invoice-duplicate">Duplicate as new draft</button></div></article>` +
+      (i.status === "draft"
+        ? ""
+        : payments
+          ? paymentsHtml(payments, settlementToken(i.tokenId).symbol)
+          : `<section class="panel" id="invoice-payments"><div class="section-title"><h2>Payments</h2></div><p class="muted" role="status">Checking payments…</p></section>`);
+    if (i.status !== "draft" && !payments) void loadPayments(i);
     el.querySelector<HTMLButtonElement>("#invoice-copy")?.addEventListener("click", async () => {
       try {
         await navigator.clipboard.writeText(link);

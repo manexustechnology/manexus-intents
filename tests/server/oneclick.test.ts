@@ -47,6 +47,9 @@ test("status maps upstream shape", async () => {
   const s = await oc.status("dep", "memo");
   assert.match(h.calls[0].url, /\/v0\/status\?depositAddress=dep&depositMemo=memo$/);
   assert.deepEqual([s.status, s.amountOut, s.originTxHashes, s.destinationTxHashes], ["SUCCESS", "5", ["a"], ["b"]]);
+  assert.equal(s.depositAddress, undefined);
+  const h3 = fake(200, { status: "PROCESSING", updatedAt: "t", quoteResponse: { quoteRequest: fx.quoteRequest, quote: { depositAddress: "dep" } } });
+  assert.equal((await createOneClick({ baseUrl: "https://x", fetch: h3.f }).status("dep")).depositAddress, "dep");
   const h2 = fake(200, { status: "WEIRD", updatedAt: "t" });
   await assert.rejects(createOneClick({ baseUrl: "https://x", fetch: h2.f }).status("d"), (e: any) => e.status === 502);
 });

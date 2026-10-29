@@ -1419,11 +1419,40 @@ a.primary {
   flex-wrap: wrap;
   margin-top: 16px;
 }
-.badge.status-issued,
-.badge.status-paid {
+.badge.status-issued {
   color: #2f6b3c;
   border-color: #b9d6a5;
   background: #eff6e7;
+}
+.badge.status-paid,
+.badge.outcome-paid {
+  color: #fff;
+  border-color: #2f6b3c;
+  background: #2f6b3c;
+}
+.badge.outcome-duplicate,
+.badge.outcome-after_cancel {
+  color: #6b4f12;
+  border-color: #e3cf96;
+  background: #fbf5e3;
+}
+.badge.outcome-refunded,
+.badge.outcome-failed {
+  color: #9a3b1f;
+  border-color: #e6b9a8;
+  background: #fbefe9;
+}
+.payment-list {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
+}
+.payment-row {
+  display: grid;
+  gap: 4px;
+  padding: 12px 0;
+  border-top: 1px solid #e3ebe0;
+  overflow-wrap: anywhere;
 }
 .badge.status-overdue {
   color: #9a3b1f;

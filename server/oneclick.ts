@@ -49,6 +49,8 @@ export type SwapStatus = {
   status: (typeof SWAP_STATUSES)[number];
   updatedAt: string;
   quoteRequest: QuoteRequest;
+  /** Deposit address echoed in `quoteResponse.quote`, when upstream includes it. */
+  depositAddress?: string;
   amountOut?: string;
   refundedAmount?: string;
   originTxHashes: string[];
@@ -141,11 +143,13 @@ export function createOneClick(opts: { baseUrl: string; apiKey?: string; fetch: 
       if (!SWAP_STATUSES.includes(status as never)) throw bad();
       const qr = isRec(data.quoteResponse) ? data.quoteResponse.quoteRequest : undefined;
       if (!isRec(qr)) throw bad();
+      const quote = isRec(data.quoteResponse) && isRec(data.quoteResponse.quote) ? data.quoteResponse.quote : {};
       const sd = isRec(data.swapDetails) ? data.swapDetails : {};
       return {
         status: status as SwapStatus["status"],
         updatedAt: str(data.updatedAt),
         quoteRequest: qr as unknown as QuoteRequest,
+        ...(quote.depositAddress != null ? { depositAddress: str(quote.depositAddress) } : {}),
         ...(sd.amountOut != null ? { amountOut: str(sd.amountOut) } : {}),
         ...(sd.refundedAmount != null ? { refundedAmount: str(sd.refundedAmount) } : {}),
         originTxHashes: hashes(sd.originChainTxHashes),

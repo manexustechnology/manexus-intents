@@ -16,14 +16,30 @@ const invoice = (status: string) => ({
   },
 });
 
-async function mock(page: Page, status = "issued", deadline = new Date(Date.now() + 25 * 60_000).toISOString()) {
-  const seen: { quote?: unknown; deposit?: unknown } = {};
+type StatusBody = { invoiceStatus: string; attempts: Record<string, unknown>[] };
+const pending = (over: Record<string, unknown> = {}) => ({
+  symbol: "USDC", blockchain: "arb", depositAddress: "0xDEPOSIT", depositMemo: "memo-7", originAsset: ARB, amountIn: "710180", amountInFormatted: "0.71018",
+  deadline: new Date(Date.now() + 25 * 60_000).toISOString(), status: "PENDING_DEPOSIT", expired: false, destinationTxHashes: [], ...over,
+});
+const NEAR_TX = "6xJZ3tYbKk7d8m9QpR2sT4uV5wX6yZ7aB8cD9eF1gH2j";
+
+async function mock(
+  page: Page,
+  status = "issued",
+  deadline = new Date(Date.now() + 25 * 60_000).toISOString(),
+  statusBody: () => StatusBody = () => ({ invoiceStatus: status, attempts: [] }),
+) {
+  const seen: { quote?: unknown; deposit?: unknown; status: number } = { status: 0 };
   await page.route(/^(?!http:\/\/(127\.0\.0\.1|localhost)[:/]).*/, (r) => r.abort());
   await page.route("**/api/**", async (r) => {
     const req = r.request();
     const path = new URL(req.url()).pathname;
     if (path === "/api/public/invoices/pub1") return r.fulfill({ json: invoice(status) });
     if (path === "/api/tokens") return r.fulfill({ json: TOKENS });
+    if (path === "/api/public/invoices/pub1/status") {
+      seen.status++;
+      return r.fulfill({ json: statusBody() });
+    }
     if (path.endsWith("/quote")) {
       seen.quote = JSON.parse(req.postData()!);
       return r.fulfill({
@@ -99,3 +115,61 @@ for (const [status, text] of [["paid", "This invoice has been paid"], ["cancelle
     await expect(page.locator("#pay-form")).toHaveCount(0);
   });
 }
+
+test("an open attempt from the server resumes without session storage", async ({ page }) => {
+  await mock(page, "issued", undefined, () => ({ invoiceStatus: "issued", attempts: [pending()] }));
+  await page.goto("/#/pay/pub1");
+  await expect(page.locator("#pay-amount")).toHaveText("0.71018 USDC");
+  await expect(page.locator("#pay-address")).toHaveText("0xDEPOSIT");
+  await expect(page.locator("#pay-form")).toHaveCount(0);
+});
+
+test("polls every 10 s: pending → processing → paid with a NEAR explorer link, then stops", async ({ page }) => {
+  await page.clock.install();
+  let phase = 0;
+  const seen = await mock(page, "issued", undefined, () =>
+    phase === 0
+      ? { invoiceStatus: "issued", attempts: [pending()] }
+      : phase === 1
+        ? { invoiceStatus: "issued", attempts: [pending({ status: "PROCESSING" })] }
+        : { invoiceStatus: "paid", attempts: [pending({ status: "SUCCESS", outcome: "paid", destinationTxHashes: [NEAR_TX] })] },
+  );
+  await page.goto("/#/pay/pub1");
+  await expect(page.locator("#pay-address")).toBeVisible();
+  const initial = seen.status; // the router may mount public views twice while the session loads
+  phase = 1;
+  await page.clock.runFor(9_000);
+  expect(seen.status).toBe(initial);
+  await page.clock.runFor(1_000);
+  await expect(page.getByRole("heading", { name: "Processing" })).toBeVisible();
+  expect(seen.status).toBe(initial + 1);
+  await expect(page.locator("#pay-address")).toHaveCount(0);
+  phase = 2;
+  await page.clock.runFor(10_000);
+  await expect(page.getByRole("heading", { name: "Paid — thank you" })).toBeVisible();
+  await expect(page.getByRole("link", { name: /^6xJZ3tYb/ })).toHaveAttribute("href", `https://nearblocks.io/txns/${NEAR_TX}`);
+  const calls = seen.status;
+  await page.clock.runFor(60_000);
+  expect(seen.status).toBe(calls);
+});
+
+test("a refunded attempt shows a notice and the form again", async ({ page }) => {
+  await mock(page, "issued", undefined, () => ({ invoiceStatus: "issued", attempts: [pending({ status: "REFUNDED", outcome: "refunded" })] }));
+  await page.goto("/#/pay/pub1");
+  await expect(page.getByRole("alert").filter({ hasText: "refunded to your refund address" })).toBeVisible();
+  await expect(page.locator("#pay-form")).toBeVisible();
+});
+
+test("does not show instructions without a formatted amount", async ({ page }) => {
+  await mock(page, "issued", undefined, () => ({ invoiceStatus: "issued", attempts: [pending({ amountInFormatted: "", symbol: "", blockchain: "" })] }));
+  await page.goto("/#/pay/pub1");
+  await expect(page.getByRole("alert").filter({ hasText: "Do not send funds until it is shown" })).toBeVisible();
+  await expect(page.locator("#pay-amount")).toHaveCount(0);
+});
+
+test("XSS-shaped upstream values are escaped", async ({ page }) => {
+  await mock(page, "paid", undefined, () => ({ invoiceStatus: "paid", attempts: [pending({ status: "SUCCESS", outcome: "paid", destinationTxHashes: ["<img src=x onerror=alert(1)>"] })] }));
+  await page.goto("/#/pay/pub1");
+  await expect(page.getByText("<img src=x onerror=alert(1)>")).toBeVisible();
+  await expect(page.locator("img")).toHaveCount(0);
+});

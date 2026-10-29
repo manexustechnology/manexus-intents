@@ -5,7 +5,7 @@ const USDC = "nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36
 
 type Row = Record<string, unknown> & { id: string; status: string; revision: number; data: Record<string, unknown> };
 
-async function mockApi(page: Page) {
+async function mockApi(page: Page, payments: Record<string, unknown>[] = [], paidOnPayments = false) {
   const rows: Row[] = [];
   await page.route(/^(?!http:\/\/(127\.0\.0\.1|localhost)[:/]).*/, (r) => r.abort());
   await page.route("**/api/**", async (r) => {
@@ -21,6 +21,12 @@ async function mockApi(page: Page) {
       };
       rows.push(row);
       return r.fulfill({ status: 201, json: row });
+    }
+    const pm = /^\/api\/invoices\/([^/]+)\/payments$/.exec(path);
+    const prow = pm && rows.find((x) => x.id === pm[1]);
+    if (prow) {
+      if (paidOnPayments) Object.assign(prow, { status: "paid", paidAt: "2030-01-02T00:00:00Z", paidBy: "dep1" });
+      return r.fulfill({ json: { invoiceStatus: prow.status, attempts: payments } });
     }
     const m = /^\/api\/invoices\/([^/]+)(?:\/(issue|cancel))?$/.exec(path);
     const row = m && rows.find((x) => x.id === m[1]);
@@ -81,4 +87,26 @@ test("cancel and duplicate an issued invoice", async ({ page }) => {
   await page.getByRole("button", { name: "Duplicate as new draft" }).click();
   await expect(page.getByRole("heading", { name: "Edit draft" })).toBeVisible();
   await expect(page.locator("#invoice-number")).toHaveValue(/^DEMO-001-/);
+});
+
+const attempt = (over: Record<string, unknown>) => ({
+  symbol: "USDC", blockchain: "arb", depositAddress: "dep1", originAsset: "nep141:arb", amountIn: "710180", amountInFormatted: "0.71018",
+  status: "SUCCESS", expired: false, createdAt: "2030-01-01T00:05:00.000Z", refundTo: "0x1", originTxHashes: ["0xorigin"],
+  destinationTxHashes: ["6xJZ3tYbKk7d8m9QpR2sT4uV5wX6yZ7aB8cD9eF1gH2j"], amountOut: "700000", amountOutFormatted: "0.7", ...over,
+});
+
+test("owner sees verified payments, extra payments and the Paid chip", async ({ page }) => {
+  await mockApi(page, [attempt({ depositAddress: "dep2", outcome: "duplicate" }), attempt({ outcome: "paid" }), attempt({ depositAddress: "dep3", status: "REFUNDED", outcome: "refunded", destinationTxHashes: [], originTxHashes: [] })], true);
+  await createAndIssue(page);
+  await expect(page.locator(".heading .badge.status-paid")).toContainText("Paid");
+  await expect(page.getByText(/paid 2030-01-02/)).toBeVisible();
+  const list = page.locator("#invoice-payments");
+  await expect(list.locator(".payment-row")).toHaveCount(3);
+  await expect(list.locator('[data-deposit="dep2"]')).toContainText("Extra payment received (in your balance)");
+  await expect(list.locator('[data-deposit="dep1"] .badge')).toHaveText("Paid");
+  await expect(list.locator('[data-deposit="dep1"]')).toContainText("Received 0.7 USDC");
+  await expect(list.locator('[data-deposit="dep1"] a')).toHaveAttribute("href", /^https:\/\/nearblocks\.io\/txns\//);
+  await expect(list.locator('[data-deposit="dep3"] .badge')).toHaveText("Refunded");
+  await page.getByRole("link", { name: "← Invoices" }).click();
+  await expect(page.locator(".invoice-record", { hasText: "DEMO-001" }).locator(".badge.status-paid")).toHaveText("✓ Paid");
 });
