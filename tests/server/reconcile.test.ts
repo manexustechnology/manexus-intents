@@ -311,6 +311,7 @@ test("guarded UPDATE: a payment recorded by another refresh between read and wri
   const { db, inv, oneclick } = await setup({ dep1: swap("SUCCESS") });
   let raced = false;
   const racing: typeof db = {
+    batch: (stmts) => db.batch(stmts),
     prepare(sql: string) {
       const p = db.prepare(sql);
       return {
@@ -353,4 +354,21 @@ test("a refresh never overwrites an outcome recorded concurrently", async () => 
   const a = (await byAddr(db, inv.id)).dep1;
   assert.equal(a.outcome, "refunded");
   assert.equal(a.status, "REFUNDED");
+});
+
+test("refreshInvoice asks 1Click about at most 10 attempts per call, stalest first, still oldest-created first within them", async () => {
+  const deps15 = Array.from({ length: 15 }, (_, k) => `d${String(k + 1).padStart(2, "0")}`);
+  const { db, inv, deps, calls } = await setup(Object.fromEntries(deps15.map((d) => [d, swap("PROCESSING")])), []);
+  // d01 is the oldest attempt but was checked most recently; d15 is the newest and the stalest.
+  for (const [k, d] of deps15.entries())
+    await saveAttempt(db, attempt(inv.id, d, { createdAt: `2030-01-01T00:00:${String(k).padStart(2, "0")}.000Z`, updatedAt: `2030-01-01T00:05:${String(59 - k).padStart(2, "0")}.000Z` }));
+  db.queries = 0;
+  await refreshInvoice(deps, inv.id);
+  console.log(`refreshInvoice 15 open attempts: ${db.queries} queries`);
+  assert.deepEqual(calls.map(([a]) => a), deps15.slice(5)); // d06..d15, processed in created order
+  assert.ok(db.queries <= 31, `${db.queries} queries`);
+  calls.length = 0;
+  await refreshInvoice({ ...deps, now: new Date(NOW.getTime() + 60_000) }, inv.id);
+  assert.deepEqual(calls.map(([a]) => a).slice(0, 5), deps15.slice(0, 5)); // the five left out go next
+  assert.equal(calls.length, 10);
 });

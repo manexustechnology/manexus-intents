@@ -1,12 +1,10 @@
 import { supportedChain } from "../../shared/address.ts";
-import { erc191SignedData, nep413SignArgs, nep413SignedData, type Nep413Payload } from "../../shared/intent-sign.ts";
 import { escapeHTML as esc } from "../../shared/text.ts";
 import { baseUnits } from "../../shared/units.ts";
 import { api, postJson } from "../api.ts";
-import {
-  ensureWallet, NEAR_WALLETS, nearPublicKey, registerIntentsKey, signErc191, signNep413, walletConnected,
-  type NearWalletId, type Session,
-} from "../wallet/index.ts";
+import { registerKey, signAndSubmit } from "../sign-flow.ts";
+import { countdown, msg } from "./transfer-ui.ts";
+import { NEAR_WALLETS, walletConnected, type NearWalletId, type Session } from "../wallet/index.ts";
 
 type Balance = { tokenId: string; symbol: string; blockchain: string; decimals: number; amount: string; formatted: string };
 type Token = { assetId: string; symbol: string; blockchain: string; decimals: number };
@@ -57,12 +55,6 @@ const STATUS_TEXT: Record<string, string> = {
 const TERMINAL = new Set(["SUCCESS", "REFUNDED", "FAILED"]);
 const POLL_MS = 5_000;
 const tokenLabel = (t: { symbol: string; blockchain: string }) => `${t.symbol} · ${chainName(t.blockchain)}`;
-const msg = (e: unknown) => (e instanceof Error ? e.message : "Something went wrong.");
-
-function countdown(deadline: string, now = Date.now()): string {
-  const s = Math.max(0, Math.floor((new Date(deadline).getTime() - now) / 1000));
-  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
-}
 
 type Step =
   | { kind: "form" }
@@ -283,18 +275,6 @@ ${TERMINAL.has(w.status) ? `<button class="primary" type="button" id="wd-new">Ne
     };
   }
 
-  /** Pause on the registration screen until the key is registered (or the user cancels). */
-  async function ensureKey(quote: Quote, publicKey: string): Promise<void> {
-    const st = await api<{ registered: boolean }>(`/api/withdrawals/key-status?publicKey=${encodeURIComponent(publicKey)}`);
-    if (st.registered) return;
-    await new Promise<void>((resolve, reject) => {
-      busy = "";
-      error = "";
-      step = { kind: "register", quote, publicKey, resolve, reject };
-      draw();
-    });
-  }
-
   function wireRegister(s: Extract<Step, { kind: "register" }>) {
     q<HTMLButtonElement>("#wd-reg-cancel")!.onclick = () => s.reject(new Error("Key registration cancelled. Nothing was sent."));
     q<HTMLButtonElement>("#wd-reg")!.onclick = async () => {
@@ -302,10 +282,9 @@ ${TERMINAL.has(w.status) ? `<button class="primary" type="button" id="wd-new">Ne
       error = "";
       draw();
       try {
-        await registerIntentsKey(s.publicKey);
-        const st = await api<{ registered: boolean }>(`/api/withdrawals/key-status?publicKey=${encodeURIComponent(s.publicKey)}`);
+        const registered = await registerKey(s.publicKey);
         busy = "";
-        if (!st.registered) {
+        if (!registered) {
           error = "The key is not registered yet. Wait a few seconds and approve again, or try again later.";
           draw();
           return;
@@ -325,29 +304,27 @@ ${TERMINAL.has(w.status) ? `<button class="primary" type="button" id="wd-new">Ne
     error = "";
     draw();
     try {
-      await ensureWallet(session, nearWallet);
-      let signedData: unknown;
-      if (quote.intent.standard === "erc191") {
-        if (typeof quote.intent.payload !== "string") throw new Error("Invalid intent payload.");
-        signedData = erc191SignedData(quote.intent.payload, await signErc191(quote.intent.payload));
-      } else {
-        const payload = quote.intent.payload as Nep413Payload;
-        // Register before signing when the wallet reports its key; otherwise check the key that signed.
-        const known = await nearPublicKey();
-        if (known) await ensureKey(quote, known);
-        step = { kind: "review", quote, confirmed: true };
-        busy = "Waiting for wallet…";
-        draw();
-        const signed = await signNep413(nep413SignArgs(payload));
-        if (signed.publicKey !== known) {
-          await ensureKey(quote, signed.publicKey);
+      const w = await signAndSubmit<Withdrawal>(
+        quote,
+        session,
+        (st) => {
+          if (st === "key" || !alive) return; // the registration screen is shown by confirmKeyRegistration
           step = { kind: "review", quote, confirmed: true };
-        }
-        signedData = nep413SignedData(payload, signed);
-      }
-      busy = "Submitting…";
-      if (alive) draw();
-      const w = await postJson<Withdrawal>("/api/withdrawals/submit", { depositAddress: quote.depositAddress, signedData });
+          busy = st === "sign" ? "Waiting for wallet…" : "Submitting…";
+          draw();
+        },
+        {
+          nearWallet,
+          // Pause on the registration screen until the key is registered (or the user cancels).
+          confirmKeyRegistration: (publicKey) =>
+            new Promise<void>((resolve, reject) => {
+              busy = "";
+              error = "";
+              step = { kind: "register", quote, publicKey, resolve, reject };
+              draw();
+            }),
+        },
+      );
       if (!alive) return;
       busy = "";
       step = { kind: "track", w };

@@ -110,6 +110,42 @@ aside {
   font-size: 8px;
   color: #69844b;
 }
+/* Mobile-only "More" entry and its menu (Payroll, Withdraw, Sign out). */
+.nav-more,
+.more-menu {
+  display: none;
+}
+button.nav,
+.more-item {
+  font: inherit;
+  cursor: pointer;
+}
+.more-menu[hidden] {
+  display: none !important;
+}
+.more-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 12px 14px;
+  border-radius: 9px;
+  background: transparent;
+  color: #284b32;
+  font-size: 14px;
+  font-weight: 600;
+  text-align: left;
+  text-decoration: none;
+}
+.more-item > span {
+  width: 20px;
+  font-size: 18px;
+  text-align: center;
+}
+.more-item.active,
+.more-item:hover {
+  background: #eaf3e6;
+}
 .sidebottom {
   margin-top: auto;
   font-size: 11px;
@@ -1255,6 +1291,27 @@ dd {
   nav {
     grid-template-columns: repeat(5, 1fr);
   }
+  .nav-secondary {
+    display: none;
+  }
+  .nav-more {
+    display: flex;
+  }
+  .more-menu {
+    display: flex;
+    flex-direction: column;
+    position: fixed;
+    right: 8px;
+    bottom: 80px;
+    z-index: 20;
+    min-width: 190px;
+    max-width: calc(100vw - 16px);
+    padding: 6px;
+    background: #fff;
+    border: 1px solid #dde6db;
+    border-radius: 12px;
+    box-shadow: 0 12px 32px rgba(23, 63, 53, 0.16);
+  }
   .nav {
     font-size: 8px;
   }
@@ -1489,3 +1546,66 @@ a.primary {
 .home-card { display: flex; flex-direction: column; gap: 4px; padding: 14px 16px; border: 1px solid #e1e8e2; border-radius: 11px; }
 main > .panel { margin-bottom: 16px; }
 a.secondary { display: inline-flex; align-items: center; padding: 0 16px; min-height: 40px; border: 1px solid #cfd9d1; border-radius: 10px; color: #1f2d24; text-decoration: none; font-weight: 600; background: #fff; }
+.slippage {
+  margin: 14px 0;
+}
+
+.home-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; }
+.activity-list { display: flex; flex-direction: column; }
+.activity-row { display: grid; grid-template-columns: 32px 1fr auto; gap: 12px; align-items: center; padding: 10px 0; border-top: 1px solid #e1e8e2; color: inherit; text-decoration: none; }
+.activity-row:first-child { border-top: 0; }
+.activity-row small { display: block; color: #819086; }
+.activity-icon { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 50%; background: #eef3ef; }
+.activity-amount { font-variant-numeric: tabular-nums; }
+
+/* Bills */
+.tabs {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 18px;
+  border-bottom: 1px solid #e3ebe0;
+}
+.tabs [role="tab"] {
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  padding: 10px 12px;
+  font: inherit;
+  font-weight: 600;
+  color: #5f6f65;
+  cursor: pointer;
+}
+.tabs [role="tab"][aria-selected="true"] {
+  color: #173d2c;
+  border-bottom-color: #2f6b3c;
+}
+.badge.status-due,
+.badge.status-bill-scheduled {
+  color: #2f6b3c;
+  border-color: #b9d6a5;
+  background: #eff6e7;
+}
+.badge.status-bill-paying {
+  color: #6b4f12;
+  border-color: #e3cf96;
+  background: #fbf5e3;
+}
+.badge.status-bill-paid {
+  color: #fff;
+  border-color: #2f6b3c;
+  background: #2f6b3c;
+}
+.badge.status-bill-cancelled {
+  color: #7a7a7a;
+}
+
+/* Payroll */
+.table-scroll { overflow-x: auto; margin-top: 12px; }
+.payroll-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.payroll-table th { text-align: left; font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: #5f6f65; padding: 8px 10px; border-bottom: 1px solid #e3ebe0; }
+.payroll-table td { padding: 10px; border-bottom: 1px solid #e3ebe0; vertical-align: top; overflow-wrap: anywhere; }
+.payroll-table code { font-size: 12px; }
+.payroll-table tr.line-error td,
+.payment-row.line-error { background: #fbefe9; }
+#batch-confirm, #batch-register { margin-top: 14px; }

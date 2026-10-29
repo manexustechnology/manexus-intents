@@ -43,7 +43,7 @@ async function setup(page: Page, opts: { statuses?: string[] } = {}) {
         status: 201,
         json: { depositAddress: DEP, deadline: "2999-01-01T00:00:00.000Z", intent: { standard: "erc191", payload: PAYLOAD }, withdrawal: withdrawal("AWAITING_SIGNATURE") },
       });
-    if (path === "/api/withdrawals/submit") return r.fulfill({ json: withdrawal("PROCESSING", { intentHash: "H" }) });
+    if (path === "/api/transfers/submit") return r.fulfill({ json: withdrawal("PROCESSING", { intentHash: "H" }) });
     if (path === `/api/withdrawals/${DEP}`) {
       const st = statuses.shift() ?? "SUCCESS";
       return r.fulfill({ json: withdrawal(st, st === "SUCCESS" ? { destinationTxHashes: [TX] } : {}) });
@@ -100,7 +100,7 @@ test("EVM withdrawal: review, explicit confirmation, wallet signature, progress,
   await signBtn.click();
 
   await expect(page.locator("#wd-track")).toBeVisible();
-  const submit = calls.find((c) => c.path === "/api/withdrawals/submit")!;
+  const submit = calls.find((c) => c.path === "/api/transfers/submit")!;
   const bytes = new Uint8Array(65).fill(0x11);
   bytes[64] = 1;
   const expectedSig = base58.encode(bytes);
@@ -150,7 +150,7 @@ test("server rejection is shown and nothing is signed", async ({ page }) => {
 
 test("after a submit error the review asks for confirmation again", async ({ page }) => {
   await setup(page);
-  await page.route("**/api/withdrawals/submit", (r) => r.fulfill({ status: 502, json: { error: "NEAR Intents: boom" } }));
+  await page.route("**/api/transfers/submit", (r) => r.fulfill({ status: 502, json: { error: "NEAR Intents: boom" } }));
   await fillForm(page);
   await page.locator("#wd-amount").fill("1.5");
   await page.locator("#wd-recipient").fill(DEST);
@@ -169,7 +169,7 @@ for (const [name, over, shown] of [
 ] as const) {
   test(`a ${name} withdrawal ${shown ? "explains no funds moved" : "shows only Failed"}`, async ({ page }) => {
     await setup(page);
-    await page.route("**/api/withdrawals/submit", (r) => r.fulfill({ json: withdrawal("FAILED", over) }));
+    await page.route("**/api/transfers/submit", (r) => r.fulfill({ json: withdrawal("FAILED", over) }));
     await fillForm(page);
     await page.locator("#wd-amount").fill("1.5");
     await page.locator("#wd-recipient").fill(DEST);

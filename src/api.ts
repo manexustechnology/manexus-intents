@@ -1,8 +1,11 @@
 export class ApiError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  /** The parsed error body (e.g. `lineErrors` next to `error`), when the server sent JSON. */
+  body: unknown;
+  constructor(status: number, message: string, body: unknown = null) {
     super(message);
     this.status = status;
+    this.body = body;
   }
 }
 
@@ -19,9 +22,10 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   }
   if (!res.ok) {
     const msg = (body as { error?: unknown } | null)?.error;
-    throw new ApiError(res.status, typeof msg === "string" ? msg : `Request failed (${res.status})`);
+    throw new ApiError(res.status, typeof msg === "string" ? msg : `Request failed (${res.status})`, body);
   }
   return body as T;
 }
 
 export const postJson = <T>(path: string, data: unknown) => api<T>(path, { method: "POST", body: JSON.stringify(data) });
+export const deleteJson = <T>(path: string) => api<T>(path, { method: "DELETE" });

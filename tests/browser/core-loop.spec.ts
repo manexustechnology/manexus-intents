@@ -54,7 +54,7 @@ function fakeServer() {
       if (path === "/api/withdrawals" && m === "GET") return r.fulfill({ json: [] });
       if (path === "/api/withdrawals/quote")
         return r.fulfill({ status: 201, json: { depositAddress: DEP_OUT, deadline: FAR, intent: { standard: "erc191", payload: PAYLOAD }, withdrawal: wd("AWAITING_SIGNATURE") } });
-      if (path === "/api/withdrawals/submit") { s.withdrawn = true; return r.fulfill({ json: wd("PROCESSING") }); }
+      if (path === "/api/transfers/submit") { s.withdrawn = true; return r.fulfill({ json: wd("PROCESSING") }); }
       if (path === `/api/withdrawals/${DEP_OUT}`) return r.fulfill({ json: wd("SUCCESS", { destinationTxHashes: [TX] }) });
       return r.fulfill({ status: 404, json: { error: "Not found" } });
     });
