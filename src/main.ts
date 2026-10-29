@@ -1,6 +1,8 @@
 import "./style.css";
 import { escapeHTML as esc } from "../shared/text.ts";
 import { api, ApiError } from "./api.ts";
+import { mountInvoice } from "./views/invoice-detail.ts";
+import { mountInvoices } from "./views/invoices.ts";
 import { mountLogin } from "./views/login.ts";
 import { disconnectWallet, type Session } from "./wallet/index.ts";
 
@@ -46,8 +48,8 @@ const placeholder =
     return () => {};
   };
 registerView("home", placeholder("Home"));
-registerView("invoices", placeholder("Invoices"));
-registerView("invoice", placeholder("Invoice"));
+registerView("invoices", mountInvoices);
+registerView("invoice", mountInvoice);
 registerView("withdraw", placeholder("Withdraw"));
 registerView("pay", placeholder("Pay invoice"));
 

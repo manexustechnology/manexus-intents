@@ -1405,3 +1405,31 @@ dd {
     font-size: 25px;
   }
 }
+a.invoice-record {
+  text-decoration: none;
+}
+a.primary {
+  display: inline-block;
+  text-decoration: none;
+}
+.invoice-actions {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 16px;
+}
+.badge.status-issued,
+.badge.status-paid {
+  color: #2f6b3c;
+  border-color: #b9d6a5;
+  background: #eff6e7;
+}
+.badge.status-overdue {
+  color: #9a3b1f;
+  border-color: #e6b9a8;
+  background: #fbefe9;
+}
+.badge.status-cancelled {
+  color: #7a7a7a;
+}
