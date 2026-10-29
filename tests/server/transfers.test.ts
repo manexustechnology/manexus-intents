@@ -18,7 +18,7 @@ import {
   type TransferDeps,
   type TransferRequest,
 } from "../../server/transfers.ts";
-import { listWithdrawals, quoteWithdrawal } from "../../server/withdraw.ts";
+import { listWithdrawals, quoteWithdrawal, refreshWithdrawal, submitWithdrawal } from "../../server/withdraw.ts";
 import { onRequestGet as transfersGet } from "../../functions/api/transfers/index.ts";
 
 const USDC = SETTLEMENT_TOKENS[0].tokenId;
@@ -136,6 +136,21 @@ test("EXACT_OUTPUT whose amountOut is below the requested amount is 502 and noth
   await assert.rejects(quoteTransfer(deps(db, f), NEAR_USER, billReq()), { status: 502 });
   assert.equal(f.calls.generate.length, 0);
   assert.deepEqual(await rows(db), []);
+});
+
+test("EXACT_OUTPUT whose minAmountOut is below the requested amount is 502 before generate-intent and nothing is stored", async () => {
+  const db = createTestDb();
+  const f = fakes({ quote: () => ({ amountOut: "1000500", minAmountOut: "999999" }) });
+  await assert.rejects(quoteTransfer(deps(db, f), NEAR_USER, billReq()), { status: 502 });
+  assert.equal(f.calls.generate.length, 0);
+  assert.deepEqual(await rows(db), []);
+});
+
+test("withdraw routes keep the Withdrawal not found message", async () => {
+  const f = fakes();
+  await assert.rejects(refreshWithdrawal(deps(createTestDb(), f), NEAR_USER, "nope"), { status: 404, message: "Withdrawal not found" });
+  await assert.rejects(submitWithdrawal(deps(createTestDb(), f), NEAR_USER, { depositAddress: "nope", signedData: { standard: "nep413" } }), { status: 404, message: "Withdrawal not found" });
+  await assert.rejects(refreshTransfer(deps(createTestDb(), f), NEAR_USER, "nope"), { status: 404, message: "Transfer not found" });
 });
 
 test("EXACT_OUTPUT generated intent transferring the requested amount instead of amountIn is 502 and not stored", async () => {

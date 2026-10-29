@@ -11,6 +11,7 @@ import {
   type TransferStatus,
   type TransferView,
 } from "./transfers.ts";
+import { HttpError } from "./http.ts";
 
 type User = { account: string; kind: "near" | "evm" };
 
@@ -20,8 +21,21 @@ export type WithdrawalView = TransferView;
 export type WithdrawalQuote = TransferQuote;
 
 export { keyStatus };
-export const submitWithdrawal = submitTransfer;
-export const refreshWithdrawal = refreshTransfer;
+
+/** The engine's 404 says "Transfer"; the withdraw routes keep their Plan 1 wording. */
+async function asWithdrawal<T>(p: Promise<T>): Promise<T> {
+  try {
+    return await p;
+  } catch (e) {
+    if (e instanceof HttpError && e.status === 404) throw new HttpError(404, "Withdrawal not found");
+    throw e;
+  }
+}
+
+export const submitWithdrawal = (deps: WithdrawDeps, user: User, body: { depositAddress: string; signedData: unknown }) =>
+  asWithdrawal(submitTransfer(deps, user, body));
+export const refreshWithdrawal = (deps: WithdrawDeps, user: User, depositAddress: string) =>
+  asWithdrawal(refreshTransfer(deps, user, depositAddress));
 
 export function quoteWithdrawal(
   deps: WithdrawDeps,

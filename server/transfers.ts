@@ -299,6 +299,8 @@ async function prepareChecked(deps: TransferDeps, user: User, c: Checked, q: Quo
     if (!DIGITS.test(q.amountIn)) throw new HttpError(502, "NEAR Intents returned an unexpected response");
     if (BigInt(q.amountIn) > BigInt(c.held.amount)) throw new HttpError(400, "Amount exceeds your balance");
     if (BigInt(q.amountOut) < BigInt(c.amount)) throw new HttpError(502, "NEAR Intents returned an unexpected response");
+    // The recipient must never receive less than the bill/payroll amount, even at the slippage floor.
+    if (BigInt(q.minAmountOut) < BigInt(c.amount)) throw new HttpError(502, "NEAR Intents returned an unexpected response");
     sent = q.amountIn;
   }
 
@@ -341,9 +343,14 @@ async function prepareChecked(deps: TransferDeps, user: User, c: Checked, q: Quo
 }
 
 /**
- * Store a transfer for a 1Click quote the caller already obtained (for `req`, with depositType and
- * refundType INTENTS and refundTo the owner). The request and the quote are checked exactly as in
- * `quoteTransfer`.
+ * Store a transfer for a 1Click quote the caller already obtained. The request and the quote are
+ * checked exactly as in `quoteTransfer`.
+ *
+ * Callers MUST obtain `q` from a QuoteRequest equal to `req`: same originAsset, destinationAsset,
+ * amount, swapType, recipient, recipientType and slippage, with depositType and refundType INTENTS and
+ * refundTo the owner. The 1Click Quote does not echo the recipient, destination asset or swap type,
+ * and the generated intent binds only origin, amount and deposit address, so those fields of `req`
+ * are stored on trust.
  */
 export async function prepareTransfer(deps: TransferDeps, user: User, req: TransferRequest, q: Quote): Promise<TransferQuote> {
   return prepareChecked(deps, user, await checkRequest(deps, user, req), q);
