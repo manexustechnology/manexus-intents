@@ -1,433 +1,214 @@
-import { mountInvoices } from "./invoice-ui.ts";
-import { mountTestnet, mountSimulation } from "./testnet-ui.ts";
-import { dryQuoteBody, safeQuote, formatUnits } from "./live.ts";
 import "./style.css";
-import {
-  fixtures,
-  estimate,
-  escapeHTML as esc,
-  parseRequest,
-  requestHash,
-  validateRequest,
-  type Token,
-  type RequestData,
-} from "./domain.ts";
-let tokens: Token[] = [...fixtures],
-  live = false,
-  tab = "overview",
-  filter = "",
-  hidden = false;
-let quoteTimer: ReturnType<typeof setInterval> | undefined;
+import { escapeHTML as esc } from "../shared/text.ts";
+import { api, ApiError } from "./api.ts";
+import { mountAgent } from "./views/agent.ts";
+import { mountBill } from "./views/bill-detail.ts";
+import { mountBills, mountNewBill } from "./views/bills.ts";
+import { mountHome } from "./views/home.ts";
+import { mountInvoice } from "./views/invoice-detail.ts";
+import { mountInvoices } from "./views/invoices.ts";
+import { mountPay } from "./views/pay.ts";
+import { mountPayroll } from "./views/payroll.ts";
+import { mountPayrollBatch } from "./views/payroll-batch.ts";
+import { mountLogin } from "./views/login.ts";
+import { mountSwap } from "./views/swap.ts";
+import { mountWithdraw } from "./views/withdraw.ts";
+import { disconnectWallet, type Session } from "./wallet/index.ts";
+
+export type Mount = (el: HTMLElement, params: Record<string, string>) => () => void;
+
+type Route = { name: string; params: Record<string, string>; public: boolean; nav: string; title: string };
+
+const views = new Map<string, Mount>();
+export function registerView(name: string, mount: Mount): void {
+  views.set(name, mount);
+}
+
+const ROUTES: { pattern: RegExp; name: string; keys: string[]; public?: boolean; nav: string; title: string }[] = [
+  { pattern: /^\/?$/, name: "home", keys: [], nav: "home", title: "Home" },
+  { pattern: /^\/invoices\/?$/, name: "invoices", keys: [], nav: "invoices", title: "Invoices" },
+  { pattern: /^\/invoices\/([^/]+)\/?$/, name: "invoice", keys: ["id"], nav: "invoices", title: "Invoice" },
+  { pattern: /^\/bills\/?$/, name: "bills", keys: [], nav: "bills", title: "Bills" },
+  { pattern: /^\/bills\/new\/?$/, name: "bill-new", keys: [], nav: "bills", title: "New bill" },
+  { pattern: /^\/bills\/([^/]+)\/?$/, name: "bill", keys: ["id"], nav: "bills", title: "Bill" },
+  { pattern: /^\/payroll\/?$/, name: "payroll", keys: [], nav: "payroll", title: "Payroll" },
+  { pattern: /^\/payroll\/([^/]+)\/?$/, name: "payroll-batch", keys: ["id"], nav: "payroll", title: "Payout" },
+  { pattern: /^\/swap\/?$/, name: "swap", keys: [], nav: "swap", title: "Swap" },
+  { pattern: /^\/withdraw\/?$/, name: "withdraw", keys: [], nav: "withdraw", title: "Withdraw" },
+  { pattern: /^\/agent\/?$/, name: "agent", keys: [], nav: "agent", title: "Agent" },
+  { pattern: /^\/pay\/([^/]+)\/?$/, name: "pay", keys: ["publicId"], public: true, nav: "", title: "Pay invoice" },
+];
+
+export function parseRoute(hash: string): Route | null {
+  const path = hash.replace(/^#/, "") || "/";
+  for (const r of ROUTES) {
+    const m = r.pattern.exec(path);
+    if (!m) continue;
+    const params: Record<string, string> = {};
+    r.keys.forEach((k, i) => {
+      try {
+        params[k] = decodeURIComponent(m[i + 1]);
+      } catch {
+        params[k] = m[i + 1];
+      }
+    });
+    return { name: r.name, params, public: !!r.public, nav: r.nav, title: r.title };
+  }
+  return null;
+}
+
+registerView("home", mountHome);
+registerView("invoices", mountInvoices);
+registerView("invoice", mountInvoice);
+registerView("bills", mountBills);
+registerView("bill-new", mountNewBill);
+registerView("bill", mountBill);
+registerView("payroll", mountPayroll);
+registerView("payroll-batch", mountPayrollBatch);
+registerView("swap", mountSwap);
+registerView("withdraw", mountWithdraw);
+registerView("agent", mountAgent);
+registerView("pay", mountPay);
+
+// Desktop sidebar lists every entry. The mobile bottom bar shows the primary ones plus "More",
+// which opens the rest (Payroll, Withdraw, Agent) and Sign out.
+const NAV: [string, string, string, string][] = [
+  ["home", "#/", "◫", "Home"],
+  ["invoices", "#/invoices", "▤", "Invoices"],
+  ["bills", "#/bills", "▥", "Bills"],
+  ["swap", "#/swap", "⇄", "Swap"],
+  ["payroll", "#/payroll", "☰", "Payroll"],
+  ["withdraw", "#/withdraw", "↗", "Withdraw"],
+  ["agent", "#/agent", "✦", "Agent"],
+];
+const MOBILE_PRIMARY = new Set(["home", "invoices", "bills", "swap"]);
+
 const app = document.querySelector<HTMLDivElement>("#app")!;
-const names: Record<string, string> = {
-  eth: "Ethereum",
-  near: "NEAR",
-  btc: "Bitcoin",
-  sol: "Solana",
-  arb: "Arbitrum",
-  base: "Base",
-  "base-sepolia": "Base Sepolia testnet",
-};
-const chain = (s: string) => names[s] ?? s;
-const money = (n: number) =>
-  new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD",
-    maximumFractionDigits: n < 1 ? 4 : 2,
-  }).format(n);
-const icon = (s: string) =>
-  `<span class="coin ${esc(s.toLowerCase())}">${esc(s === "BTC" ? "₿" : s === "ETH" ? "Ξ" : s === "USDC" ? "$" : s === "SOL" ? "≋" : s.slice(0, 1))}</span>`;
-let unmountInvoices = () => true;
-function shell() {
-  if (!unmountInvoices()) {
-    tab = "invoices";
+let session: Session | null | undefined; // undefined = not yet known
+let sessionError = "";
+let unmount: () => void = () => {};
+
+function shortAccount(a: string): string {
+  if (/^0x[0-9a-f]{40}$/.test(a)) return `${a.slice(0, 6)}…${a.slice(-4)}`;
+  return a.length > 22 ? `${a.slice(0, 10)}…${a.slice(-8)}` : a;
+}
+
+const brand = `<a class="brand" href="#/" aria-label="Manexus home"><span class="brandmark">m</span>manexus<span class="dot">.</span></a>`;
+const footer = `<footer><span>Non-custodial: Manexus never holds your keys or funds.</span><span>Powered by NEAR Intents</span></footer>`;
+
+const current = (route: Route, id: string) => (route.nav === id ? ' aria-current="page"' : "");
+
+function navHtml(route: Route): string {
+  const links = NAV.map(
+    ([id, href, icon, label]) =>
+      `<a href="${href}" class="nav ${route.nav === id ? "active" : ""} ${MOBILE_PRIMARY.has(id) ? "" : "nav-secondary"}"${current(route, id)}><span aria-hidden="true">${icon}</span>${esc(label)}</a>`,
+  ).join("");
+  const rest = NAV.filter(([id]) => !MOBILE_PRIMARY.has(id));
+  const moreActive = rest.some(([id]) => route.nav === id);
+  const menu = `${rest
+    .map(([id, href, icon, label]) => `<a href="${href}" class="more-item ${route.nav === id ? "active" : ""}"${current(route, id)}><span aria-hidden="true">${icon}</span>${esc(label)}</a>`)
+    .join("")}<button type="button" class="more-item" id="more-sign-out"><span aria-hidden="true">⏻</span>Sign out</button>`;
+  return `${links}<button type="button" class="nav nav-more ${moreActive ? "active" : ""}" id="nav-more" aria-haspopup="true" aria-expanded="false" aria-controls="more-menu"><span aria-hidden="true">⋯</span>More</button><div class="more-menu" id="more-menu" hidden>${menu}</div>`;
+}
+
+function wireMore(): void {
+  const btn = app.querySelector<HTMLButtonElement>("#nav-more")!;
+  const menu = app.querySelector<HTMLElement>("#more-menu")!;
+  const set = (open: boolean) => {
+    menu.hidden = !open;
+    btn.setAttribute("aria-expanded", String(open));
+  };
+  btn.onclick = (e) => {
+    e.stopPropagation();
+    set(menu.hidden);
+  };
+  menu.onclick = (e) => {
+    if ((e.target as HTMLElement).closest("a")) set(false);
+  };
+  app.querySelector<HTMLButtonElement>("#more-sign-out")!.onclick = () => {
+    set(false);
+    void signOut();
+  };
+  app.onkeydown = (e) => {
+    if (e.key === "Escape" && !menu.hidden) {
+      set(false);
+      btn.focus();
+    }
+  };
+  app.onclick = (e) => {
+    if (!menu.hidden && !(e.target as HTMLElement).closest("#more-menu, #nav-more")) set(false);
+  };
+}
+
+function shell(route: Route, s: Session): HTMLElement {
+  app.className = "";
+  app.innerHTML = `<aside>${brand}<span class="workspace">YOUR BUSINESS</span><nav aria-label="Main navigation">${navHtml(route)}</nav><div class="sidebottom"><div class="network"><i></i> Powered by NEAR Intents</div><p>Manexus · v0.1</p></div></aside><div class="page"><header><span class="crumb">Workspace <span>/</span> ${esc(route.title)}</span><div class="header-right"><span class="account-chip" title="${esc(s.account)}"><span class="kind">${s.kind === "near" ? "NEAR" : "EVM"}</span><span class="account-id">${esc(shortAccount(s.account))}</span></span><button class="textbutton" id="sign-out">Sign out</button></div></header><main id="content"></main>${footer}</div>`;
+  app.querySelector<HTMLButtonElement>("#sign-out")!.onclick = signOut;
+  wireMore();
+  return app.querySelector<HTMLElement>("#content")!;
+}
+
+function bare(title: string): HTMLElement {
+  app.className = "bare";
+  app.onclick = null;
+  app.onkeydown = null;
+  app.innerHTML = `<div class="page"><header>${brand}<span class="crumb">${esc(title)}</span></header><main id="content"></main>${footer}</div>`;
+  return app.querySelector<HTMLElement>("#content")!;
+}
+
+function render(): void {
+  unmount();
+  unmount = () => {};
+  const route = parseRoute(location.hash);
+  if (!route) {
+    const el = session ? shell({ name: "", params: {}, public: false, nav: "", title: "Not found" }, session) : bare("Not found");
+    el.innerHTML = `<div class="heading"><div><h1>Page not found</h1><p class="muted"><a href="#/">Go to home</a></p></div></div>`;
     return;
   }
-  unmountInvoices = () => true;
-  clearInterval(quoteTimer);
-  app.innerHTML = `<aside><a class="brand" href="#" aria-label="Manexus home"><span class="brandmark">m</span>manexus<span class="dot">.</span></a><span class="workspace">YOUR FINANCIAL WORLD</span><nav aria-label="Main navigation">${[
-    ["overview", "◫", "Overview"],
-    ["swap", "⇄", "Swap"],
-    ["payments", "↗", "Payments"],
-    ["invoices", "▤", "Invoices"],
-    ["explore", "◇", "Explore assets"],
-  ]
-    .map(
-      ([id, i, n]) =>
-        `<button data-tab="${id}" class="nav ${tab === id ? "active" : ""}"><span>${i}</span>${n}${id === "explore" ? "<small>NEW</small>" : ""}</button>`,
-    )
-    .join(
-      "",
-    )}</nav><div class="sidebottom"><div class="network"><i></i> Built around NEAR Intents</div><button class="textbutton" data-tab="privacy">◎ Privacy & transparency</button><p>Manexus preview · v0.1</p></div></aside><div class="page"><header><span class="crumb">Workspace <span>/</span> ${tab === "overview" ? "Overview" : tab === "explore" ? "Explore assets" : tab === "privacy" ? "Privacy" : tab[0].toUpperCase() + tab.slice(1)}</span><div class="header-right"><span class="badge">Preview release</span><span class="avatar">M</span></div></header><main id="content"></main><footer><span>Built for a world without boundaries. <button class="textbutton" data-tab="privacy">Privacy & transparency</button></span><span>Base Sepolia payments only · Mainnet execution disabled</span></footer></div><div id="toast" role="status"></div>`;
-  app.querySelectorAll<HTMLButtonElement>("[data-tab]").forEach(
-    (b) =>
-      (b.onclick = () => {
-        tab = b.dataset.tab!;
-        shell();
-      }),
-  );
-  app.querySelector(".brand")!.addEventListener("click", () => {
-    tab = "overview";
-    shell();
-  });
-  if (tab === "invoices") {
-    unmountInvoices = mountInvoices(document.querySelector("#content")!, go);
+  if (route.public) {
+    unmount = views.get(route.name)!(bare(route.title), route.params);
     return;
+  }
+  if (session === undefined) {
+    bare("Loading").innerHTML = `<p class="muted" role="status">Loading…</p>`;
+    return;
+  }
+  if (session === null) {
+    unmount = mountLogin(
+      bare("Sign in"),
+      (s) => {
+        session = s;
+        sessionError = "";
+        render();
+      },
+      sessionError,
+    );
+    return;
+  }
+  unmount = views.get(route.name)!(shell(route, session), route.params);
+}
+
+async function signOut(): Promise<void> {
+  try {
+    await api("/api/auth/logout", { method: "POST" });
+  } catch {
+    /* cookie may already be gone */
+  }
+  await disconnectWallet();
+  session = null;
+  render();
+}
+
+async function loadSession(): Promise<void> {
+  try {
+    session = await api<Session>("/api/me");
+  } catch (e) {
+    session = null;
+    if (!(e instanceof ApiError && e.status === 401)) sessionError = "Could not reach the server. Try again in a moment.";
   }
   render();
-  if (tab === "swap") {
-    livePanel();
-    mountSimulation(document.querySelector("#content")!);
-  }
-  if (tab === "payments") mountTestnet(document.querySelector("#content")!);
 }
-function heading(eyebrow: string, title: string, sub: string) {
-  return `<div class="heading"><div><p class="eyebrow">${eyebrow}</p><h1>${title}</h1><p class="muted">${sub}</p></div><span class="livebadge"><i></i>${live ? "Live token discovery" : "Sample token data"}</span></div>`;
-}
-function table() {
-  const list = tokens
-    .filter((t) =>
-      (t.symbol + " " + chain(t.blockchain))
-        .toLowerCase()
-        .includes(filter.toLowerCase()),
-    )
-    .slice(0, 12);
-  return `<div class="asset-table"><div class="table-head"><span>Asset / network</span><span>Reference price</span><span></span></div>${list.length ? list.map((t) => `<div class="asset-row"><div class="asset-name">${icon(t.symbol)}<div><strong>${esc(t.symbol)}</strong><small>${esc(chain(t.blockchain))}</small></div></div><strong>${hidden ? "••••" : money(t.price)}</strong><button class="round" data-asset="${esc(t.assetId)}" aria-label="Preview ${esc(t.symbol)} swap">↗</button></div>`).join("") : '<p class="empty">No assets match your search.</p>'}</div>`;
-}
-function bindAssets() {
-  document.querySelectorAll<HTMLButtonElement>("[data-asset]").forEach(
-    (b) =>
-      (b.onclick = () => {
-        tab = "swap";
-        shell();
-        (document.querySelector("#from") as HTMLSelectElement).value =
-          b.dataset.asset!;
-      }),
-  );
-}
-function livePanel() {
-  const panel = document.createElement("section");
-  panel.className = "panel live-panel";
-  panel.innerHTML = `<div class="section-title"><h2>Mainnet quote preview</h2><span class="badge">Public · dry run</span></div><p class="fine">Live NEAR 1Click route preview using synthetic recipient addresses. No deposit address is requested. Provider sees your IP and selected amount. Confidential quotes are unavailable.</p><form id="live-form"><label>USDC on Arbitrum<input id="live-amount" value="10" inputmode="decimal" required></label><label>Receive<select id="live-dest"><option value="wNEAR">Wrapped NEAR (wNEAR) · NEAR</option><option value="XAUT">Tether Gold (XAUT) · Ethereum</option></select></label><p class="fine">1% slippage tolerance. Network and solver costs are provider-dependent; a complete fee breakdown is not supplied here.</p><button class="primary full" id="live-submit">Get live quote ↗</button></form><div id="live-result" role="status"></div>`;
-  document.querySelector("#content")!.append(panel);
-  let version = 0;
-  panel.querySelector("form")!.addEventListener("input", () => {
-    version++;
-    panel.querySelector("#live-result")!.textContent = "";
-  });
-  panel.querySelector("form")!.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const generation = ++version;
-    const button = panel.querySelector<HTMLButtonElement>("#live-submit")!;
-    const result = panel.querySelector("#live-result")!;
-    button.disabled = true;
-    button.textContent = "Finding a route…";
-    result.textContent = "";
-    try {
-      if (!live)
-        throw Error(
-          "Live token discovery is unavailable. No sample quote will be substituted.",
-        );
-      const origin = tokens.find(
-        (t) => t.symbol === "USDC" && t.blockchain === "arb",
-      );
-      const destination = tokens.find(
-        (t) =>
-          t.symbol === value("live-dest") &&
-          t.blockchain === (value("live-dest") === "wNEAR" ? "near" : "eth"),
-      );
-      if (!origin || !destination)
-        throw Error("This route is currently unavailable.");
-      const response = await fetch("https://1click.chaindefuser.com/v0/quote", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(
-          dryQuoteBody(value("live-amount"), origin, destination),
-        ),
-        signal: AbortSignal.timeout(20000),
-      });
-      if (!response.ok)
-        throw Error(
-          response.status === 429
-            ? "Provider rate limit reached. Try again later."
-            : "Provider could not quote this route. Try another amount.",
-        );
-      const q = safeQuote(await response.json());
-      if (version !== generation) return;
-      result.innerHTML = `<dl><div><dt>Quoted output</dt><dd>${esc(q.amountOutFormatted)} ${esc(destination.symbol)}</dd></div><div><dt>Minimum output (1% slippage)</dt><dd>${esc(formatUnits(q.minAmountOut, destination.decimals))} ${esc(destination.symbol)}</dd></div><div><dt>Fetched at</dt><dd>${new Date().toLocaleTimeString()}</dd></div></dl><p class="fine">Snapshot only; refresh before evaluating another route. This is not an executable offer. No funds moved.</p>`;
-      setTimeout(() => {
-        if (panel.isConnected && version === generation)
-          result.textContent =
-            "Quote snapshot expired after 60 seconds. Request a fresh quote.";
-      }, 60000);
-    } catch (error) {
-      if (version === generation) result.textContent = (error as Error).message;
-    } finally {
-      button.disabled = false;
-      button.textContent = "Get live quote ↗";
-    }
-  });
-}
-function render() {
-  const c = document.querySelector("#content")!;
-  if (tab === "overview") {
-    c.innerHTML =
-      heading(
-        "A LITTLE LESS FRICTION",
-        "Your money. More possibilities.",
-        "Explore assets, preview a swap, or share a payment request.",
-      ) +
-      `<section class="hero"><div class="hero-copy"><span class="pill">ONE CONNECTED EXPERIENCE</span><h2>Move beyond<br>boundaries<span>.</span></h2><p>A simpler way to explore your on-chain world.<br>Start with a cross-chain swap preview.</p><button class="primary" id="start">Explore swaps <span>↗</span></button><small>Read-only preview. Your assets stay yours.</small></div><div class="orb" aria-hidden="true"><div class="orbit o1"></div><div class="orbit o2"></div><div class="globe">m<span>MANEXUS</span></div><span class="floatcoin fc1">Ξ</span><span class="floatcoin fc2">₿</span><span class="floatcoin fc3">N</span><span class="orbit-label">A WORLD OF CONNECTIONS</span></div></section><div class="quick-grid"><button class="quick" id="quick-swap"><span class="tile-icon">⇄</span><strong>Cross-chain swaps</strong><p>Find your next route.</p><span class="arrow">↗</span></button><button class="quick" id="quick-pay"><span class="tile-icon">↗</span><strong>Request a payment</strong><p>One link. Clear details.</p><span class="arrow">↗</span></button><button class="quick" id="quick-assets"><span class="tile-icon">◇</span><strong>Explore real-world assets</strong><p>A look at what’s possible.</p><span class="arrow">↗</span></button></div><section class="panel"><div class="section-title"><div><h2>Across the ecosystem</h2><p>${live ? "Public reference prices from NEAR 1Click." : "Illustrative prices. Live discovery is currently unavailable."} Prices are not executable quotes.</p></div><button id="hide" class="textbutton">${hidden ? "Show" : "Hide"} prices</button></div><label class="search"><span>⌕</span><input id="search" placeholder="Search assets or networks" aria-label="Search assets or networks"></label><div id="rows">${table()}</div></section>`;
-    document
-      .querySelector("#start")!
-      .addEventListener("click", () => go("swap"));
-    document
-      .querySelector("#quick-swap")!
-      .addEventListener("click", () => go("swap"));
-    document
-      .querySelector("#quick-pay")!
-      .addEventListener("click", () => go("payments"));
-    document
-      .querySelector("#quick-assets")!
-      .addEventListener("click", () => go("explore"));
-    document.querySelector("#hide")!.addEventListener("click", () => {
-      hidden = !hidden;
-      render();
-    });
-    document.querySelector<HTMLInputElement>("#search")!.oninput = (e) => {
-      filter = (e.target as HTMLInputElement).value;
-      document.querySelector("#rows")!.innerHTML = table();
-      bindAssets();
-    };
-    bindAssets();
-  } else if (tab === "swap") {
-    c.innerHTML =
-      heading(
-        "MOVE WITH INTENTION",
-        "A new route for your assets.",
-        "Explore a cross-chain estimate before taking your next step.",
-      ) +
-      `<div class="two-column"><section class="panel swap-panel"><div class="section-title"><h2>Swap preview</h2><span class="badge">Illustrative estimate</span></div><form id="swap-form"><label class="fieldbox">You pay<div class="amountrow"><input id="amount" value="100" inputmode="decimal" aria-label="Amount to swap"><select id="from" aria-label="Pay asset">${options()}</select></div></label><button type="button" id="reverse" class="reverse" aria-label="Reverse assets">⇅</button><label class="fieldbox">You receive<select id="to" aria-label="Receive asset">${options()}</select><span class="large" id="output">—</span></label><fieldset><legend>Slippage tolerance</legend>${[0.1, 0.5, 1].map((n) => `<label class="radio"><input type="radio" name="slippage" value="${n}" ${n === 0.5 ? "checked" : ""}>${n}%</label>`).join("")}</fieldset><p class="error" id="swap-error" role="alert"></p><button class="primary full" type="submit">Preview estimate <span>↗</span></button></form><div id="quote" aria-live="polite"></div><button class="disabled full" disabled>Execution unavailable in preview</button></section><div class="explain"><span class="big-icon">⇄</span><h2>Many chains.<br>One clear intention.</h2><p>NEAR Intents lets you describe the outcome you want. Solvers compete to find a route across networks.</p><div class="note"><strong>Know what you’re seeing</strong><p>This estimate uses reference prices only. It excludes network and solver fees and is not a live route or guaranteed rate. Slippage sets an illustrative minimum, not protection for an actual trade.</p></div><p class="fine">Mainnet signing, deposits, and swaps remain disabled. Try test ETH payments on the Payments tab.</p></div></div>`;
-    (document.querySelector("#to") as HTMLSelectElement).selectedIndex = 1;
-    document.querySelector("#reverse")!.addEventListener("click", () => {
-      const a = document.querySelector<HTMLSelectElement>("#from")!,
-        b = document.querySelector<HTMLSelectElement>("#to")!;
-      [a.value, b.value] = [b.value, a.value];
-      invalidate();
-    });
-    document.querySelector("#swap-form")!.addEventListener("input", invalidate);
-    document.querySelector("#swap-form")!.addEventListener("submit", (e) => {
-      e.preventDefault();
-      try {
-        const from = [...tokens, ...fixtures].find(
-            (t) => t.assetId === value("from"),
-          )!,
-          to = [...tokens, ...fixtures].find((t) => t.assetId === value("to"))!;
-        const s = Number(
-          document.querySelector<HTMLInputElement>("[name=slippage]:checked")!
-            .value,
-        );
-        const q = estimate(value("amount"), from, to, s);
-        document.querySelector("#swap-error")!.textContent = "";
-        document.querySelector("#output")!.textContent =
-          q.output.toLocaleString("en-US", { maximumFractionDigits: 8 }) +
-          " " +
-          to.symbol;
-        let remaining = 60;
-        document.querySelector("#quote")!.innerHTML =
-          `<dl><div><dt>Illustrative minimum</dt><dd>${q.minimum.toFixed(6)} ${esc(to.symbol)}</dd></div><div><dt>Network + solver fees</dt><dd>Not included</dd></div><div><dt>Refresh estimate in</dt><dd id="fresh">60s</dd></div><div><dt>Price source</dt><dd>${from.assetId.startsWith("sample-") || to.assetId.startsWith("sample-") ? "Sample data" : "1Click reference prices"}</dd></div></dl>`;
-        clearInterval(quoteTimer);
-        quoteTimer = setInterval(() => {
-          remaining--;
-          const el = document.querySelector("#fresh");
-          if (el)
-            el.textContent =
-              remaining > 0 ? remaining + "s" : "Expired — preview again";
-          if (remaining <= 0) {
-            clearInterval(quoteTimer);
-            document.querySelector("#output")!.textContent = "Expired";
-          }
-        }, 1000);
-      } catch (err) {
-        invalidate();
-        document.querySelector("#swap-error")!.textContent = (
-          err as Error
-        ).message;
-      }
-    });
-  } else if (tab === "payments") {
-    c.innerHTML =
-      heading(
-        "MAKE IT SIMPLE",
-        "A request, ready to share.",
-        "Create a clear payment request. No wallet connection needed.",
-      ) +
-      `<div class="two-column"><section class="panel"><h2>Request a payment</h2><p class="muted">Only enter a public receiving address.</p><form id="payment-form"><label>Asset and network<select id="pay-token"><option value="ETH:base-sepolia">Test ETH · Base Sepolia</option><option value="USDC:eth">USDC · Ethereum (request only)</option><option value="ETH:eth">ETH · Ethereum</option><option value="NEAR:near">NEAR · NEAR</option><option value="SOL:sol">SOL · Solana</option></select></label><label>Amount<input id="pay-amount" inputmode="decimal" placeholder="0.00" required></label><label>Public receiving address<input id="address" placeholder="0x…" autocomplete="off" spellcheck="false" required maxlength="64"></label><p class="fine">The address, amount, asset and network will be visible to anyone with your link. Verify the address and network independently.</p><p class="error" role="alert" id="pay-error"></p><button type="submit" class="primary full">Create request <span>↗</span></button></form></section><section class="request-preview panel" id="request-preview"><span class="big-icon">↗</span><h2>Clear details.<br>Less back and forth.</h2><p class="muted">Your shareable request will appear here.</p><span class="badge">No funds move when you create a request</span></section></div>`;
-    document.querySelector("#payment-form")!.addEventListener("submit", (e) => {
-      e.preventDefault();
-      const [symbol, ch] = value("pay-token").split(":");
-      const d = {
-        symbol,
-        chain: ch,
-        amount: value("pay-amount"),
-        address: value("address").trim(),
-      };
-      if (!validateRequest(d)) {
-        document.querySelector("#pay-error")!.textContent =
-          "Enter a positive amount and a valid address for the selected network. USDC supports 6 decimal places; other assets support 8 in this preview.";
-        return;
-      }
-      document.querySelector("#pay-error")!.textContent = "";
-      showRequest(d, true);
-    });
-    const d = parseRequest(location.hash);
-    if (d) showRequest(d, false);
-  } else if (tab === "explore") {
-    c.innerHTML =
-      heading(
-        "A WIDER WORLD",
-        "Real-world ideas. On-chain potential.",
-        "Explore the categories shaping tokenized ownership.",
-      ) +
-      `<div class="notice"><strong>Concept gallery · synthetic examples</strong><p>These are educational concepts, not issued tokens, verified inventory, investment offers, or assets available to trade.</p></div><div class="concept-grid">${[
-        [
-          "01",
-          "Treasury instruments",
-          "Short-duration government debt represented on-chain.",
-          "▤",
-        ],
-        [
-          "02",
-          "Real estate",
-          "Digital representations of property-related interests.",
-          "▥",
-        ],
-        [
-          "03",
-          "Commodities",
-          "Tokenized claims linked to physical materials.",
-          "◇",
-        ],
-      ]
-        .map(
-          ([n, t, d, i]) =>
-            `<article class="panel concept"><div class="concept-art">${i}<small>${n} / CONCEPT</small></div><span class="eyebrow">EXPLORATORY</span><h2>${t}</h2><p>${d}</p><button class="textbutton learn" data-title="${t}">What to consider ↗</button></article>`,
-        )
-        .join("")}</div><div id="learn-panel" class="note" hidden></div>`;
-    document.querySelectorAll<HTMLButtonElement>(".learn").forEach(
-      (b) =>
-        (b.onclick = () => {
-          const p = document.querySelector<HTMLElement>("#learn-panel")!;
-          p.hidden = false;
-          p.innerHTML = `<h2>${esc(b.dataset.title!)}</h2><p>Before any future integration, verify the issuer, legal claim, custody, redemption terms, transfer restrictions, jurisdiction and liquidity. Tokenization does not remove market, counterparty or regulatory risk. No trading is enabled here.</p>`;
-        }),
-    );
-  } else
-    c.innerHTML =
-      heading(
-        "TRANSPARENCY BY DESIGN",
-        "Your privacy deserves clarity.",
-        "Understand what this preview does, and what it does not do.",
-      ) +
-      `<section class="panel prose"><h2>Hiding a balance is a screen preference</h2><p>The hide-prices control only conceals values on your screen. It does not make transactions private or conceal blockchain activity.</p><h2>No private payments are implemented</h2><p>This release builds public-address payment requests. It does not implement shielded transfers, zero-knowledge proofs, or another on-chain privacy mechanism.</p><h2>Your request stays in your link</h2><p>Requests use a URL fragment containing only the public address, amount, asset and network you enter. This app has no request database, analytics, or signing backend. Anyone with the link can read its contents; your browser and sharing app may retain it.</p><h2>Public data, clear boundaries</h2><p>Token discovery calls NEAR 1Click directly from your browser, exposing your IP address to that service. If unavailable, the app labels sample data. Reference prices are not trade quotes. An optional injected wallet can send native test ETH on Base Sepolia after your approval. Public testnet transactions are visible on-chain. The latest test payment details are stored locally for recovery. Mainnet signing, deposits and trading remain disabled; NEAR Intents quotes are read-only.</p><a href="https://docs.near-intents.org/" target="_blank" rel="noreferrer">Read about NEAR Intents ↗</a></section>`;
-}
-function options() {
-  return tokens
-    .map(
-      (t) =>
-        `<option value="${esc(t.assetId)}">${esc(t.symbol)} · ${esc(chain(t.blockchain))}</option>`,
-    )
-    .join("");
-}
-function value(id: string) {
-  return (document.getElementById(id) as HTMLInputElement).value;
-}
-function go(t: string) {
-  tab = t;
-  shell();
-  window.scrollTo(0, 0);
-}
-function invalidate() {
-  clearInterval(quoteTimer);
-  const el = document.querySelector("#quote");
-  if (el) el.innerHTML = "";
-  const o = document.querySelector("#output");
-  if (o) o.textContent = "—";
-}
-function showRequest(d: RequestData, created: boolean) {
-  const url = location.origin + location.pathname + requestHash(d);
-  document.querySelector("#request-preview")!.innerHTML =
-    `<span class="eyebrow">${created ? "REQUEST READY" : "SHARED PAYMENT REQUEST"}</span><h2>${esc(d.amount)} <span>${esc(d.symbol)}</span></h2><span class="badge">${esc(chain(d.chain))} network</span><p class="muted">Requested to this public address</p><code>${esc(d.address)}</code><p class="fine">Unverified recipient. Confirm the address and network with the requester through a trusted channel. This page does not verify ownership or payment status.</p><label>Shareable request link<input readonly id="share-link" value="${esc(url)}"></label><button id="copy" class="primary full">Copy request link ↗</button><p class="fine">Request only · No payment has been sent</p>`;
-  document.querySelector("#copy")!.addEventListener("click", async () => {
-    try {
-      await navigator.clipboard.writeText(url);
-      document.querySelector("#toast")!.textContent = "Request link copied";
-    } catch {
-      (document.querySelector("#share-link") as HTMLInputElement).select();
-      document.querySelector("#toast")!.textContent =
-        "Select and copy the request link above";
-    }
-  });
-}
-function openHash() {
-  if (location.hash.startsWith("#invoice=")) {
-    tab = "invoices";
-    shell();
-    return;
-  }
-  if (location.hash) {
-    tab = "payments";
-    shell();
-    if (!parseRequest(location.hash))
-      document
-        .querySelector("#pay-error")
-        ?.replaceChildren(
-          document.createTextNode(
-            "This request link is invalid or unsupported.",
-          ),
-        );
-  }
-}
-if (location.hash.startsWith("#invoice=")) tab = "invoices";
-else if (location.hash) tab = "payments";
-shell();
-window.addEventListener("hashchange", openHash);
-if (
-  location.hash &&
-  !location.hash.startsWith("#invoice=") &&
-  !parseRequest(location.hash)
-)
-  document
-    .querySelector("#pay-error")
-    ?.replaceChildren(
-      document.createTextNode("This request link is invalid or unsupported."),
-    );
-async function loadTokens() {
-  try {
-    const response = await fetch("https://1click.chaindefuser.com/v0/tokens", {
-      signal: AbortSignal.timeout(8000),
-    });
-    if (!response.ok) throw Error();
-    const data: unknown = await response.json();
-    if (!Array.isArray(data)) throw Error();
-    const valid = data.filter(
-      (t): t is Token =>
-        t &&
-        typeof t.assetId === "string" &&
-        typeof t.symbol === "string" &&
-        typeof t.blockchain === "string" &&
-        Number.isInteger(t.decimals) &&
-        t.decimals >= 0 &&
-        typeof t.price === "number" &&
-        Number.isFinite(t.price) &&
-        t.price > 0,
-    );
-    if (valid.length < 2) throw Error();
-    tokens = valid;
-    live = true;
-    if (tab === "overview") render();
-  } catch {
-    /* Explicitly labelled fixtures remain available. */
-  }
-}
-void loadTokens();
+
+window.addEventListener("hashchange", render);
+render();
+void loadSession();

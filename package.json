@@ -5,17 +5,28 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
-    "build": "tsc --noEmit && vite build",
-    "typecheck": "tsc --noEmit",
-    "test": "node --experimental-strip-types --test tests/*.test.ts",
-    "test:e2e": "playwright test"
+    "build": "npm run typecheck && vite build",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p functions",
+    "test": "node --test 'tests/**/*.test.ts'",
+    "test:e2e": "playwright test",
+    "dev:api": "vite build && wrangler pages dev --persist-to .wrangler/state --ip 127.0.0.1 --port 24011",
+    "db:migrate:local": "wrangler d1 migrations apply manexus-intents --local --persist-to .wrangler/state"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261029.1",
     "@playwright/test": "^1.64.1",
     "typescript": "~5.9.3",
-    "vite": "^7.1.12"
+    "vite": "^7.1.12",
+    "wrangler": "^4.155.0"
   },
   "dependencies": {
+    "@near-wallet-selector/core": "^10.1.4",
+    "@near-wallet-selector/hot-wallet": "^10.1.4",
+    "@near-wallet-selector/meteor-wallet": "^10.1.4",
+    "@noble/curves": "^2.4.0",
+    "@noble/hashes": "^2.4.0",
+    "@scure/base": "^2.4.0",
+    "buffer": "^6.0.3",
     "viem": "^2.57.7"
   }
 }

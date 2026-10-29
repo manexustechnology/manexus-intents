@@ -1,0 +1,14 @@
+name = "manexus-intents"
+pages_build_output_dir = "dist"
+compatibility_date = "2026-10-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "manexus-intents"
+# Placeholder for local dev only; Task 9 fills in the real database id.
+database_id = "local-placeholder"
+migrations_dir = "migrations"
+
+[vars]
+NEAR_RPC_URL = "https://rpc.mainnet.fastnear.com"
+ONECLICK_BASE_URL = "https://1click.chaindefuser.com"

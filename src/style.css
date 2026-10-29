@@ -95,6 +95,7 @@ aside {
   text-align: left;
   font-weight: 550;
   gap: 13px;
+  text-decoration: none;
 }
 .nav > span {
   font-size: 22px;
@@ -108,6 +109,42 @@ aside {
   margin-left: auto;
   font-size: 8px;
   color: #69844b;
+}
+/* Mobile-only "More" entry and its menu (Payroll, Withdraw, Sign out). */
+.nav-more,
+.more-menu {
+  display: none;
+}
+button.nav,
+.more-item {
+  font: inherit;
+  cursor: pointer;
+}
+.more-menu[hidden] {
+  display: none !important;
+}
+.more-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 12px 14px;
+  border-radius: 9px;
+  background: transparent;
+  color: #284b32;
+  font-size: 14px;
+  font-weight: 600;
+  text-align: left;
+  text-decoration: none;
+}
+.more-item > span {
+  width: 20px;
+  font-size: 18px;
+  text-align: center;
+}
+.more-item.active,
+.more-item:hover {
+  background: #eaf3e6;
 }
 .sidebottom {
   margin-top: auto;
@@ -835,7 +872,7 @@ dd {
   }
   nav {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(3, 1fr);
     height: 100%;
     padding: 5px 8px;
   }
@@ -1051,76 +1088,6 @@ dd {
     font-size: 12px;
   }
 }
-.live-panel {
-  max-width: 950px;
-  margin: 25px auto;
-}
-.live-panel form {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 0 20px;
-}
-.live-panel form .fine,
-.live-panel form button {
-  grid-column: 1/-1;
-}
-.live-panel button:disabled {
-  opacity: 0.6;
-  cursor: wait;
-}
-@media (max-width: 760px) {
-  .live-panel form {
-    display: block;
-  }
-}
-.testnet-panel {
-  max-width: 950px;
-  margin: 0 auto 28px;
-  border-color: #b7d59c;
-}
-.testnet-panel h3 {
-  font-size: 15px;
-}
-.wallet-actions {
-  display: flex;
-  align-items: center;
-  gap: 18px;
-  flex-wrap: wrap;
-  margin: 20px 0;
-}
-.wallet-actions a {
-  font-size: 11px;
-}
-.address-line {
-  overflow-wrap: anywhere;
-  word-break: break-word;
-}
-.testnet-panel dd {
-  max-width: 65%;
-}
-.confirm-label {
-  display: flex;
-  align-items: start;
-  gap: 10px;
-  font-size: 12px;
-  line-height: 1.6;
-  margin: 20px 0;
-}
-.confirm-label input {
-  margin: 3px 0 0;
-}
-.testnet-panel button:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-#simulation-status {
-  padding-left: 23px;
-  font-size: 12px;
-  line-height: 1.7;
-}
-#simulation-status li {
-  margin: 13px 0;
-}
 .invoice-toolbar {
   display: flex;
   align-items: center;
@@ -1324,6 +1291,27 @@ dd {
   nav {
     grid-template-columns: repeat(5, 1fr);
   }
+  .nav-secondary {
+    display: none;
+  }
+  .nav-more {
+    display: flex;
+  }
+  .more-menu {
+    display: flex;
+    flex-direction: column;
+    position: fixed;
+    right: 8px;
+    bottom: 80px;
+    z-index: 20;
+    min-width: 190px;
+    max-width: calc(100vw - 16px);
+    padding: 6px;
+    background: #fff;
+    border: 1px solid #dde6db;
+    border-radius: 12px;
+    box-shadow: 0 12px 32px rgba(23, 63, 53, 0.16);
+  }
   .nav {
     font-size: 8px;
   }
@@ -1378,3 +1366,264 @@ dd {
   display: inline-block;
   margin-right: 18px;
 }
+
+/* App shell: account chip, signed-out layout, login */
+.account-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid #dce5de;
+  background: #fafcf9;
+  border-radius: 999px;
+  padding: 5px 12px 5px 5px;
+  font-size: 12px;
+  max-width: 260px;
+}
+.account-chip .kind {
+  background: #173f35;
+  color: #b9f06e;
+  border-radius: 999px;
+  padding: 3px 8px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.8px;
+}
+.account-chip .account-id {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bare .page {
+  margin-left: 0;
+}
+.bare header {
+  gap: 16px;
+}
+.login {
+  max-width: 820px;
+  margin: 20px auto;
+}
+.login h1 {
+  margin-top: 6px;
+}
+.login-options {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+  margin: 26px 0 14px;
+}
+.login-card h2 {
+  font-size: 17px;
+}
+.login-card .fine {
+  min-height: 3.4em;
+}
+.login button:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+.wallet-choices {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+.wallet-choices[hidden] {
+  display: none;
+}
+.choice {
+  border: 1px solid #dce5de;
+  background: #fff;
+  border-radius: 9px;
+  padding: 11px 14px;
+  text-align: left;
+  font-weight: 600;
+  color: #284b32;
+}
+.choice:hover {
+  background: #eaf3e6;
+}
+@media (max-width: 760px) {
+  .login-options {
+    grid-template-columns: 1fr;
+  }
+  .account-chip {
+    max-width: 170px;
+  }
+  .bare footer {
+    padding-bottom: 24px;
+  }
+  .bare .brand {
+    display: flex;
+    font-size: 20px;
+  }
+  .bare .brandmark {
+    width: 30px;
+    height: 30px;
+    font-size: 25px;
+  }
+}
+a.invoice-record {
+  text-decoration: none;
+}
+a.primary {
+  display: inline-block;
+  text-decoration: none;
+}
+.invoice-actions {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 16px;
+}
+.badge.status-issued {
+  color: #2f6b3c;
+  border-color: #b9d6a5;
+  background: #eff6e7;
+}
+.badge.status-paid,
+.badge.outcome-paid {
+  color: #fff;
+  border-color: #2f6b3c;
+  background: #2f6b3c;
+}
+.badge.outcome-duplicate,
+.badge.outcome-after_cancel,
+.badge.outcome-mismatch {
+  color: #6b4f12;
+  border-color: #e3cf96;
+  background: #fbf5e3;
+}
+.badge.outcome-refunded,
+.badge.outcome-failed {
+  color: #9a3b1f;
+  border-color: #e6b9a8;
+  background: #fbefe9;
+}
+.payment-list {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
+}
+.payment-row {
+  display: grid;
+  gap: 4px;
+  padding: 12px 0;
+  border-top: 1px solid #e3ebe0;
+  overflow-wrap: anywhere;
+}
+.badge.status-overdue {
+  color: #9a3b1f;
+  border-color: #e6b9a8;
+  background: #fbefe9;
+}
+.badge.status-cancelled {
+  color: #7a7a7a;
+}
+
+.pay-instructions .pay-field {
+  display: grid;
+  gap: 6px;
+  margin: 14px 0;
+}
+.pay-instructions code {
+  display: block;
+  overflow-wrap: anywhere;
+  background: #f5f8f2;
+  padding: 12px;
+  border-radius: 8px;
+  font-size: 14px;
+}
+#pay-token {
+  width: 100%;
+}
+
+/* Home */
+.home-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+.home-total { font-size: 30px; font-weight: 600; margin: 6px 0; }
+.home-total small { font-size: 12px; font-weight: 400; color: #819086; }
+.home-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 12px; margin-top: 14px; }
+.home-card { display: flex; flex-direction: column; gap: 4px; padding: 14px 16px; border: 1px solid #e1e8e2; border-radius: 11px; }
+main > .panel { margin-bottom: 16px; }
+a.secondary { display: inline-flex; align-items: center; padding: 0 16px; min-height: 40px; border: 1px solid #cfd9d1; border-radius: 10px; color: #1f2d24; text-decoration: none; font-weight: 600; background: #fff; }
+.slippage {
+  margin: 14px 0;
+}
+
+.home-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; }
+.activity-list { display: flex; flex-direction: column; }
+.activity-row { display: grid; grid-template-columns: 32px 1fr auto; gap: 12px; align-items: center; padding: 10px 0; border-top: 1px solid #e1e8e2; color: inherit; text-decoration: none; }
+.activity-row:first-child { border-top: 0; }
+.activity-row small { display: block; color: #819086; }
+.activity-icon { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 50%; background: #eef3ef; }
+.activity-amount { font-variant-numeric: tabular-nums; }
+
+/* Bills */
+.tabs {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 18px;
+  border-bottom: 1px solid #e3ebe0;
+}
+.tabs [role="tab"] {
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  padding: 10px 12px;
+  font: inherit;
+  font-weight: 600;
+  color: #5f6f65;
+  cursor: pointer;
+}
+.tabs [role="tab"][aria-selected="true"] {
+  color: #173d2c;
+  border-bottom-color: #2f6b3c;
+}
+.badge.status-due,
+.badge.status-bill-scheduled {
+  color: #2f6b3c;
+  border-color: #b9d6a5;
+  background: #eff6e7;
+}
+.badge.status-bill-paying {
+  color: #6b4f12;
+  border-color: #e3cf96;
+  background: #fbf5e3;
+}
+.badge.status-bill-paid {
+  color: #fff;
+  border-color: #2f6b3c;
+  background: #2f6b3c;
+}
+.badge.status-bill-cancelled {
+  color: #7a7a7a;
+}
+
+/* Payroll */
+.table-scroll { overflow-x: auto; margin-top: 12px; }
+.payroll-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.payroll-table th { text-align: left; font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: #5f6f65; padding: 8px 10px; border-bottom: 1px solid #e3ebe0; }
+.payroll-table td { padding: 10px; border-bottom: 1px solid #e3ebe0; vertical-align: top; overflow-wrap: anywhere; }
+.payroll-table code { font-size: 12px; }
+.payroll-table tr.line-error td,
+.payment-row.line-error { background: #fbefe9; }
+#batch-confirm, #batch-register { margin-top: 14px; }
+
+/* Agent */
+.home-agent { margin: 0 0 16px; }
+.agent-list { display: grid; gap: 12px; }
+.agent-card { border: 1px solid #dfe7e1; border-radius: 10px; padding: 14px 16px; background: #fff; }
+.agent-card p { margin: 0 0 8px; }
+.agent-reason { font-weight: 600; overflow-wrap: anywhere; }
+.agent-card code, #ag-pay-url { overflow-wrap: anywhere; word-break: break-all; }
+.sign-step { margin-top: 16px; border: 1px solid #cfd9d1; border-radius: 10px; padding: 14px 16px; background: #f7faf7; }
+.sign-message { white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-all; font-size: 12px; background: #fff; border: 1px solid #dfe7e1; border-radius: 8px; padding: 12px; }
+#ag-rules-form fieldset, #ag-wl-form { border: 0; padding: 0; margin: 0 0 18px; }
+#ag-rules-form legend { font-weight: 700; margin-bottom: 8px; }
+.table-scroll { overflow-x: auto; max-width: 100%; }
+.ag-caps { width: 100%; border-collapse: collapse; }
+.ag-caps th, .ag-caps td { text-align: left; padding: 4px 6px; font-size: 13px; }
+.ag-caps input { width: 100%; min-width: 90px; }
+.sign-warning { color: #9a3b1f; background: #fbefe9; border: 1px solid #e6b9a8; border-radius: 8px; padding: 8px 12px; margin: 8px 0; font-size: 13px; font-weight: 600; }
+.sign-warning p { margin: 0; }
