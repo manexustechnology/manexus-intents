@@ -38,6 +38,8 @@ export const THROTTLE_MS = 60_000;
 export const FORCE_MIN_MS = 5_000;
 /** Hard cap on drafts per evaluation, so open proposals stay well under the load limit below. */
 export const MAX_DRAFTS = 200;
+/** An approved (done) follow-up for an invoice is not proposed again for this long. */
+export const FOLLOW_UP_COOLDOWN_MS = 7 * 24 * 3_600_000;
 const MAX_OPEN = 1000;
 const WRITE_CHUNK = 100;
 const ID = /^[A-Za-z0-9_-]{1,100}$/;
@@ -238,7 +240,8 @@ async function settleExecuting(deps: AgentDeps, user: User): Promise<void> {
  * Evaluate the owner's rules and store the result: new drafts become `proposed`; open `proposed` rows whose
  * basis changed (key no longer produced, different params, or past `expires_at`) are expired. `executing` rows
  * are never expired here: they follow their transfer (`settleExecuting`, run first, even when throttled). A
- * draft the owner dismissed with identical params is not proposed again. One batch writes everything; at most
+ * draft the owner dismissed with identical params is not proposed again; an approved (done) follow-up with
+ * identical params is not proposed again for FOLLOW_UP_COOLDOWN_MS (7 days). One batch writes everything; at most
  * 15 queries plus up to 5 transfer refreshes and 1 batch for executing proposals (13 for 50 bills / 100
  * invoices / 20 balances), the write batch chunked at 100 statements. A balances failure is 502 and nothing is written.
  */
@@ -258,14 +261,17 @@ export async function runAgent(deps: AgentDeps, user: User, opts: { force?: bool
   const drafts = evaluate(await loadEvalInput(deps, user, policy));
 
   const open = await openProposals(db, owner);
-  const { results: dismissed } = await db
+  const cooldownFrom = new Date(now.getTime() - FOLLOW_UP_COOLDOWN_MS).toISOString();
+  const { results: closed } = await db
     // Only the LATEST dismissal per key blocks: X -> dismissed, Y -> dismissed, X again is proposed (latest is Y).
+    // The latest done follow-up per key blocks for FOLLOW_UP_COOLDOWN_MS (older done rows are not read at all).
     .prepare(
-      `SELECT dedup_key, params FROM agent_proposals a WHERE owner = ? AND status = 'dismissed' AND updated_at =
-       (SELECT MAX(updated_at) FROM agent_proposals b WHERE b.owner = a.owner AND b.dedup_key = a.dedup_key AND b.status = 'dismissed') LIMIT 500`,
+      `SELECT dedup_key, params, status FROM agent_proposals a WHERE owner = ?
+       AND (status = 'dismissed' OR (status = 'done' AND type = 'follow_up_invoice' AND updated_at > ?)) AND updated_at =
+       (SELECT MAX(updated_at) FROM agent_proposals b WHERE b.owner = a.owner AND b.dedup_key = a.dedup_key AND b.status = a.status) LIMIT 1000`,
     )
-    .bind(owner)
-    .all<{ dedup_key: string; params: string }>();
+    .bind(owner, cooldownFrom)
+    .all<{ dedup_key: string; params: string; status: ProposalStatus }>();
   const ts = now.toISOString();
   const stmts = [];
   const keep = new Set<string>();
@@ -277,7 +283,7 @@ export async function runAgent(deps: AgentDeps, user: User, opts: { force?: bool
   }
   for (const d of drafts) {
     if (keep.has(d.dedupKey)) continue;
-    if (dismissed.some((x) => x.dedup_key === d.dedupKey && sameParams(d.params, JSON.parse(x.params) as Record<string, string>))) continue;
+    if (closed.some((x) => x.dedup_key === d.dedupKey && sameParams(d.params, JSON.parse(x.params) as Record<string, string>))) continue;
     stmts.push(
       db.prepare("INSERT INTO agent_proposals (id, owner, type, dedup_key, params, status, created_at, updated_at, expires_at) VALUES (?, ?, ?, ?, ?, 'proposed', ?, ?, ?) ON CONFLICT DO NOTHING")
         .bind(crypto.randomUUID(), owner, d.type, d.dedupKey, JSON.stringify(d.params), ts, ts, d.expiresAt),

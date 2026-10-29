@@ -388,3 +388,17 @@ test("the stuck release never releases a row an approve linked after runAgent re
   await runAgent({ ...w.deps(at(STUCK_APPROVE_MS + 1000)), db: raced }, ALICE);
   assert.deepEqual(await status(w.db, p.id), { status: "executing", deposit_address: "A-dep" });
 });
+
+test("follow_up_invoice: an approved follow-up is not re-proposed for 7 days, then may be proposed again", async () => {
+  const w = world({});
+  await insInvoice(w.db, "i1", "2030-01-01");
+  await setPolicy(w.db, ALICE.account, REMIND);
+  const p = byType(await runAgent(w.deps(), ALICE), "follow_up_invoice");
+  await approveProposal(w.deps(), ALICE, p.id, {});
+  assert.equal((await runAgent(w.deps(at(120_000)), ALICE)).filter((x) => x.type === "follow_up_invoice").length, 0);
+  assert.equal((await runAgent(w.deps(at(3 * 86_400_000)), ALICE)).filter((x) => x.type === "follow_up_invoice").length, 0);
+  const again = (await runAgent(w.deps(at(7 * 86_400_000 + 1000)), ALICE)).filter((x) => x.type === "follow_up_invoice");
+  assert.equal(again.length, 1);
+  assert.notEqual(again[0].id, p.id);
+  assert.deepEqual(again[0].params, p.params);
+});
