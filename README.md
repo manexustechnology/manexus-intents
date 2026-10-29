@@ -15,11 +15,11 @@ cp .env.example .env
 # set SESSION_SECRET in .env to the output of:
 node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"
 npm run db:migrate:local      # creates the local D1 database in .wrangler/state
-npm run dev                   # terminal 1: Vite on http://127.0.0.1:24010 (PORT=24010 from .env)
-npm run dev:api               # terminal 2: wrangler Pages on http://127.0.0.1:24011, proxying Vite
+npm run dev:api               # terminal 1: builds the app, then serves it and /api on http://127.0.0.1:24011
+npm run dev                   # terminal 2 (optional, live reload): Vite on http://127.0.0.1:24010, forwards /api to 24011
 ```
 
-Open **http://127.0.0.1:24011** (the API and the app share that origin; `curl http://127.0.0.1:24011/api/health` returns `{"ok":true}`). Then:
+Open **http://127.0.0.1:24011** (the app and the API share that origin; `curl http://127.0.0.1:24011/api/health` returns `{"ok":true}`). Then:
 
 1. **Sign in**: "Connect EVM wallet" (MetaMask or any injected browser wallet; it signs a message, no transaction, no gas) or "Connect NEAR wallet" (Meteor or HOT).
 2. **Invoices → New invoice**: fill the client and a line item, **Save draft**, **Issue invoice**, **Copy payment link** and open it (`#/pay/<publicId>`) in another window: the payer picks any token on any chain and gets a 1Click deposit address and exact amount.
@@ -163,7 +163,7 @@ API (`functions/api/`, all owner-scoped behind the session cookie except `public
 
 ## Run locally
 
-Same as [For judges](#for-judges). `.env.example` sets `PORT=24010`, the port `npm run dev:api` proxies to; if you change `PORT`, change `--proxy` in the `dev:api` script too. Wrangler reads the backend variables from `.env` (or `.dev.vars` if present). Live 1Click and NEAR mainnet are used even in local dev; there is no testnet.
+Same as [For judges](#for-judges). `npm run dev:api` runs `vite build` and then `wrangler pages dev`, which serves `dist/` (`pages_build_output_dir` in `wrangler.toml`) together with the Pages Functions and the local D1 database; re-run it to pick up frontend changes, or use `npm run dev` (Vite, `PORT=24010` from `.env.example`), which forwards `/api` to `http://127.0.0.1:24011` (`vite.config.ts`). Wrangler reads the backend variables from `.env` (or `.dev.vars` if present). Live 1Click and NEAR mainnet are used even in local dev; there is no testnet.
 
 ### Environment
 
@@ -171,6 +171,7 @@ Same as [For judges](#for-judges). `.env.example` sets `PORT=24010`, the port `n
 |---|---|---|---|
 | `PORT` | no | `24010` in `.env.example` | Vite dev/preview port. |
 | `ALLOWED_HOSTS` | no | unset | Extra hostnames Vite accepts (comma-separated). |
+| `API_PORT` | no | `24011` | Port Vite's dev server forwards `/api` to (the `dev:api` port). |
 | `SESSION_SECRET` | **yes** | — | ≥ 32 characters; signs the session cookie. Generate with the command in `.env.example`. |
 | `ONECLICK_API_KEY` | no | unset | 1Click partner key; without it 1Click adds a 0.25 % fee. |
 | `ONECLICK_BASE_URL` | no | `https://1click.chaindefuser.com` | 1Click API. |
