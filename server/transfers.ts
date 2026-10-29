@@ -498,6 +498,43 @@ export async function refreshTransfer(deps: TransferDeps, user: User, depositAdd
   return toView(await load(db, user, row.deposit_address), now);
 }
 
+/** A failed relay may still have reached NEAR Intents: wait this long past the deadline before calling it unsigned. */
+export const SUBMIT_GRACE_MS = 120_000;
+
+/**
+ * Whether an AWAITING_SIGNATURE transfer can no longer move funds: expired, and no relay possibly in
+ * flight. Pass a view fresh from `refreshTransfer`. Used before a bill or payroll line is quoted again.
+ */
+export async function unsignedForGood(deps: Pick<TransferDeps, "db" | "now">, user: User, t: TransferView): Promise<boolean> {
+  if (t.status !== "AWAITING_SIGNATURE" || !t.expired) return false;
+  const r = await deps.db.prepare("SELECT upstream FROM withdrawals WHERE deposit_address = ? AND owner = ?").bind(t.depositAddress, user.account).first<{ upstream: string | null }>();
+  let attempted = true; // unreadable upstream: assume a relay was attempted
+  try {
+    const u: unknown = JSON.parse(r?.upstream ?? "null");
+    attempted = isRec(u) && u.submitAttemptedAt !== undefined;
+  } catch {
+    /* keep attempted */
+  }
+  if (!attempted) return true;
+  // A relay was attempted and may have landed. Only a successful 1Click check made after the grace period
+  // (refreshTransfer's hold path writes updated_at on each one; errors and throttled reads do not) proves
+  // it did not.
+  const graceEnd = new Date(t.deadline).getTime() + SUBMIT_GRACE_MS;
+  return !t.refreshError && deps.now.getTime() > graceEnd && new Date(t.updatedAt).getTime() > graceEnd;
+}
+
+/** An unsigned, unexpired quote the owner can resume signing after leaving the page. */
+export type OpenQuote = { depositAddress: string; deadline: string; amountOutFormatted: string; intent: { standard: Standard; payload: unknown }; transfer: TransferView };
+
+/** The stored intent of `t` when it is still waiting for the owner's signature and unexpired, else undefined. */
+export async function openQuote(db: Db, user: User, t: TransferView | undefined): Promise<OpenQuote | undefined> {
+  if (!t || t.status !== "AWAITING_SIGNATURE" || t.expired) return undefined;
+  const r = await db.prepare("SELECT intent FROM withdrawals WHERE deposit_address = ? AND owner = ?").bind(t.depositAddress, user.account).first<{ intent: string | null }>();
+  const s = parseJson(r?.intent ?? null);
+  if (!isRec(s) || (s.standard !== "nep413" && s.standard !== "erc191")) return undefined;
+  return { depositAddress: t.depositAddress, deadline: t.deadline, amountOutFormatted: t.amountOutFormatted, intent: { standard: s.standard, payload: s.payload }, transfer: t };
+}
+
 /** Valid `?kind=` filter value, or 400. Undefined/empty means every kind. */
 export function parseKind(v: unknown): TransferKind | undefined {
   if (v === undefined || v === null || v === "") return undefined;

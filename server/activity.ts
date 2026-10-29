@@ -26,8 +26,13 @@ function clamp(limit: number): number {
   return Number.isInteger(limit) ? Math.min(100, Math.max(1, limit)) : 50;
 }
 
-const HREF: Record<TransferKind, string> = { withdraw: "#/withdraw", swap: "#/swap", bill: "#/bills", payroll: "#/" };
-const hrefOf = (t: { kind: TransferKind; billId?: string }) => (t.kind === "bill" && t.billId ? `#/bills/${encodeURIComponent(t.billId)}` : HREF[t.kind]);
+const HREF: Record<TransferKind, string> = { withdraw: "#/withdraw", swap: "#/swap", bill: "#/bills", payroll: "#/payroll" };
+const hrefOf = (t: { kind: TransferKind; billId?: string; batchId?: string }) =>
+  t.kind === "bill" && t.billId
+    ? `#/bills/${encodeURIComponent(t.billId)}`
+    : t.kind === "payroll" && t.batchId
+      ? `#/payroll/${encodeURIComponent(t.batchId)}`
+      : HREF[t.kind];
 
 export async function listActivity(deps: Deps, user: User, limit = 50): Promise<ActivityItem[]> {
   const n = clamp(limit);

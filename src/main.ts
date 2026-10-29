@@ -7,6 +7,8 @@ import { mountHome } from "./views/home.ts";
 import { mountInvoice } from "./views/invoice-detail.ts";
 import { mountInvoices } from "./views/invoices.ts";
 import { mountPay } from "./views/pay.ts";
+import { mountPayroll } from "./views/payroll.ts";
+import { mountPayrollBatch } from "./views/payroll-batch.ts";
 import { mountLogin } from "./views/login.ts";
 import { mountSwap } from "./views/swap.ts";
 import { mountWithdraw } from "./views/withdraw.ts";
@@ -28,6 +30,8 @@ const ROUTES: { pattern: RegExp; name: string; keys: string[]; public?: boolean;
   { pattern: /^\/bills\/?$/, name: "bills", keys: [], nav: "bills", title: "Bills" },
   { pattern: /^\/bills\/new\/?$/, name: "bill-new", keys: [], nav: "bills", title: "New bill" },
   { pattern: /^\/bills\/([^/]+)\/?$/, name: "bill", keys: ["id"], nav: "bills", title: "Bill" },
+  { pattern: /^\/payroll\/?$/, name: "payroll", keys: [], nav: "payroll", title: "Payroll" },
+  { pattern: /^\/payroll\/([^/]+)\/?$/, name: "payroll-batch", keys: ["id"], nav: "payroll", title: "Payout" },
   { pattern: /^\/swap\/?$/, name: "swap", keys: [], nav: "swap", title: "Swap" },
   { pattern: /^\/withdraw\/?$/, name: "withdraw", keys: [], nav: "withdraw", title: "Withdraw" },
   { pattern: /^\/pay\/([^/]+)\/?$/, name: "pay", keys: ["publicId"], public: true, nav: "", title: "Pay invoice" },
@@ -57,6 +61,8 @@ registerView("invoice", mountInvoice);
 registerView("bills", mountBills);
 registerView("bill-new", mountNewBill);
 registerView("bill", mountBill);
+registerView("payroll", mountPayroll);
+registerView("payroll-batch", mountPayrollBatch);
 registerView("swap", mountSwap);
 registerView("withdraw", mountWithdraw);
 registerView("pay", mountPay);
@@ -66,6 +72,7 @@ const NAV: [string, string, string, string][] = [
   ["invoices", "#/invoices", "▤", "Invoices"],
   ["bills", "#/bills", "▥", "Bills"],
   ["swap", "#/swap", "⇄", "Swap"],
+  ["payroll", "#/payroll", "☰", "Payroll"],
   ["withdraw", "#/withdraw", "↗", "Withdraw"],
 ];
 

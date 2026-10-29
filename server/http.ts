@@ -1,8 +1,11 @@
 export class HttpError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  /** Extra JSON fields for the error body (e.g. `lineErrors`); `error` always carries the message. */
+  extra?: Record<string, unknown>;
+  constructor(status: number, message: string, extra?: Record<string, unknown>) {
     super(message);
     this.status = status;
+    if (extra) this.extra = extra;
   }
 }
 
@@ -48,7 +51,7 @@ export async function handle(fn: () => Promise<Response>): Promise<Response> {
   try {
     return await fn();
   } catch (e) {
-    if (e instanceof HttpError) return json({ error: e.message }, e.status);
+    if (e instanceof HttpError) return json({ ...e.extra, error: e.message }, e.status);
     console.error(e);
     return json({ error: "Internal error" }, 500);
   }

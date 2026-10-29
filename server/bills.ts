@@ -15,10 +15,13 @@ import type { OneClickToken, createOneClick } from "./oneclick.ts";
 import { createIntentsPaymentQuote, type Outcome } from "./payments.ts";
 import { refreshInvoice } from "./reconcile.ts";
 import {
+  openQuote,
   prepareTransfer,
   quoteTransfer,
   refreshTransfer,
+  unsignedForGood,
   SLIPPAGE_BPS,
+  type OpenQuote,
   type RecipientType,
   type TransferDeps,
   type TransferQuote,
@@ -57,7 +60,7 @@ export type BillDetail = BillView & {
   extraPayment: boolean;
   refreshError?: string;
   /** The open unsigned quote (owner only), so the payment can be resumed after leaving the page. */
-  pendingQuote?: { depositAddress: string; deadline: string; amountOutFormatted: string; intent: { standard: "nep413" | "erc191"; payload: unknown }; transfer: TransferView };
+  pendingQuote?: OpenQuote;
 };
 
 type Raw = {
@@ -73,8 +76,6 @@ const ID = /^[A-Za-z0-9_-]{1,64}$/;
 const MAX_TEXT = 100;
 const MAX_BILLS = 1000;
 const PAGE = 100;
-/** A failed relay may still have reached NEAR Intents: wait this long past the deadline before calling it unsigned. */
-const SUBMIT_GRACE_MS = 120_000;
 const BILL_SLIPPAGE_BPS = 100;
 
 const isRec = (v: unknown): v is Rec => typeof v === "object" && v !== null && !Array.isArray(v);
@@ -280,25 +281,6 @@ export async function cancelBill(deps: { db: Db; now: Date }, user: User, id: st
   return getBill(deps.db, user.account, id);
 }
 
-/** Whether an AWAITING_SIGNATURE transfer can no longer move funds (expired, and no relay possibly in flight). */
-async function unsignedForGood(deps: TransferDeps, user: User, t: TransferView): Promise<boolean> {
-  if (t.status !== "AWAITING_SIGNATURE" || !t.expired) return false;
-  const r = await deps.db.prepare("SELECT upstream FROM withdrawals WHERE deposit_address = ? AND owner = ?").bind(t.depositAddress, user.account).first<{ upstream: string | null }>();
-  let attempted = true; // unreadable upstream: assume a relay was attempted
-  try {
-    const u: unknown = JSON.parse(r?.upstream ?? "null");
-    attempted = isRec(u) && u.submitAttemptedAt !== undefined;
-  } catch {
-    /* keep attempted */
-  }
-  if (!attempted) return true;
-  // A relay was attempted and may have landed. Only a successful 1Click check made after the grace period
-  // (refreshTransfer's hold path writes updated_at on each one; errors and throttled reads do not) proves
-  // it did not. Otherwise the bill stays paying.
-  const graceEnd = new Date(t.deadline).getTime() + SUBMIT_GRACE_MS;
-  return !t.refreshError && deps.now.getTime() > graceEnd && new Date(t.updatedAt).getTime() > graceEnd;
-}
-
 /** Refresh the bill's latest transfer and move a paying bill to paid or back to scheduled (guarded). */
 async function sync(deps: TransferDeps, user: User, bill: BillRow): Promise<{ bill: BillRow; transfer?: TransferView }> {
   if (!bill.depositAddress) return { bill };
@@ -413,17 +395,7 @@ export async function refreshBill(deps: TransferDeps, user: User, id: string): P
       }
     }
   }
-  let pendingQuote: BillDetail["pendingQuote"];
-  if (bill.status === "paying" && transfer?.status === "AWAITING_SIGNATURE" && !transfer.expired) {
-    const r = await deps.db.prepare("SELECT intent FROM withdrawals WHERE deposit_address = ? AND owner = ?").bind(transfer.depositAddress, user.account).first<{ intent: string | null }>();
-    try {
-      const s: unknown = JSON.parse(r?.intent ?? "null");
-      if (isRec(s) && (s.standard === "nep413" || s.standard === "erc191"))
-        pendingQuote = { depositAddress: transfer.depositAddress, deadline: transfer.deadline, amountOutFormatted: transfer.amountOutFormatted, intent: { standard: s.standard, payload: s.payload }, transfer };
-    } catch {
-      /* no resumable quote */
-    }
-  }
+  const pendingQuote = bill.status === "paying" ? await openQuote(deps.db, user, transfer) : undefined;
   const tokens = await deps.oneclick.tokens().catch(() => [] as OneClickToken[]);
   const [view] = billViews([bill], tokens, deps.now);
   return {
