@@ -36,4 +36,4 @@ Manual bills (any address on any supported chain, or any Intents account) are pa
 
 ## Not covered
 
-No fiat, tax, legal or accounting guarantees; no email or messaging; no partial-payment tracking; no automatic refunds of duplicate payments; no scheduled or automatic bill payments (a due date is a reminder).
+No fiat, tax, legal or accounting guarantees; no email or messaging; no partial-payment tracking; no automatic refunds of duplicate payments; no scheduled or automatic bill payments (a due date is a reminder; the agent can suggest paying a bill due soon, and the payment still needs your signature).
