@@ -48,6 +48,7 @@ type Raw = {
 const QUOTE_MINUTES = 10;
 const MAX_OPEN_QUOTES_PER_HOUR = 30;
 const REFRESH_THROTTLE_MS = 5_000;
+const STUCK_SUBMIT_MS = 120_000;
 const TERMINAL = new Set(["SUCCESS", "REFUNDED", "FAILED"]);
 const DIGITS = /^[1-9][0-9]{0,77}$/;
 const INTENTS = "intents.near";
@@ -345,8 +346,17 @@ export async function refreshWithdrawal(deps: WithdrawDeps, user: User, depositA
   // so that submit's failure revert (which requires PROCESSING) still applies.
   const unseen = s.status === "PENDING_DEPOSIT";
   const hold = unseen && (row.status === "AWAITING_SIGNATURE" || (row.status === "PROCESSING" && row.intent_hash == null));
-  const status = hold ? row.status : s.status;
   const ts = now.toISOString();
+  // A submit that never finished (worker died mid-relay) would be held PROCESSING forever: once the quote is
+  // long past its deadline nothing can still be in flight, so close it out. Guarded so a late submit result wins.
+  if (hold && row.status === "PROCESSING" && now.getTime() > time(stored(row).deadline) + STUCK_SUBMIT_MS) {
+    await db
+      .prepare("UPDATE withdrawals SET status = 'FAILED', upstream = ?, updated_at = ? WHERE deposit_address = ? AND owner = ? AND status = 'PROCESSING' AND intent_hash IS NULL")
+      .bind(trimmed(s), ts, row.deposit_address, user.account)
+      .run();
+    return toView(await load(db, user, row.deposit_address), now);
+  }
+  const status = hold ? row.status : s.status;
   await db
     .prepare("UPDATE withdrawals SET status = ?, upstream = ?, updated_at = ? WHERE deposit_address = ? AND owner = ? AND status = ?")
     .bind(status, hold ? row.upstream : trimmed(s), ts, row.deposit_address, user.account, row.status)

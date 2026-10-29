@@ -393,3 +393,20 @@ test("a refresh racing a slow submit keeps PROCESSING, so a later submit failure
   assert.equal(row?.status, "AWAITING_SIGNATURE");
   assert.match(String(row?.upstream), /submitError/);
 });
+
+test("a PROCESSING row with no intent hash that 1Click never saw fails after the deadline plus 2 minutes", async () => {
+  const { db, f, q } = await quoted(NEAR_USER, { status: async () => swap("PENDING_DEPOSIT") });
+  const dl = new Date(q.deadline).getTime();
+  await db.prepare("UPDATE withdrawals SET status = 'PROCESSING'").bind().run();
+  const at = (ms: number) => new Date(ms);
+  assert.equal((await refreshWithdrawal(deps(db, f, at(dl + 119_000)), NEAR_USER, DEP)).status, "PROCESSING");
+  assert.equal((await refreshWithdrawal(deps(db, f, at(dl + 130_000)), NEAR_USER, DEP)).status, "FAILED");
+  assert.equal((await rowOf(db))?.status, "FAILED");
+});
+
+test("the stuck-submit expiry does not touch a row that has an intent hash", async () => {
+  const { db, f, q } = await quoted(NEAR_USER, { status: async () => swap("PENDING_DEPOSIT") });
+  await db.prepare("UPDATE withdrawals SET status = 'PROCESSING', intent_hash = 'H'").bind().run();
+  const out = await refreshWithdrawal(deps(db, f, new Date(new Date(q.deadline).getTime() + 600_000)), NEAR_USER, DEP);
+  assert.equal(out.status, "PENDING_DEPOSIT");
+});
