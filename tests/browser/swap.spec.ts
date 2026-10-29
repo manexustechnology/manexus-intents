@@ -17,7 +17,7 @@ const transfer = (status: string, dest = WNEAR, sym = "wNEAR", over: Record<stri
   kind: "swap", swapType: "EXACT_INPUT", recipientType: "INTENTS", ...over,
 });
 
-async function setup(page: Page, opts: { dest?: string; sym?: string } = {}) {
+async function setup(page: Page, opts: { dest?: string; sym?: string; holdReload?: boolean } = {}) {
   const dest = opts.dest ?? WNEAR;
   const sym = opts.sym ?? "wNEAR";
   const calls: { path: string; method: string; body: unknown }[] = [];
@@ -28,6 +28,7 @@ async function setup(page: Page, opts: { dest?: string; sym?: string } = {}) {
     const body = req.postData() ? JSON.parse(req.postData()!) : null;
     calls.push({ path, method: req.method(), body });
     if (path === "/api/me") return r.fulfill({ json: { account: ADDR, kind: "evm" } });
+    if (path === "/api/balances" && opts.holdReload && calls.filter((c) => c.path === "/api/balances").length > 1) return new Promise<void>(() => {});
     if (path === "/api/balances")
       return r.fulfill({ json: [{ tokenId: USDC, symbol: "USDC", blockchain: "near", decimals: 6, amount: "2500000", formatted: "2.5", usd: "2.50" }] });
     if (path === "/api/tokens")
@@ -116,4 +117,32 @@ test("over-balance is caught before any quote", async ({ page }) => {
   await page.getByRole("button", { name: "Get quote" }).click();
   await expect(page.locator("#sw-error")).toHaveText("Amount exceeds your balance");
   expect(calls.some((c) => c.path === "/api/swaps/quote")).toBe(false);
+});
+
+test("a destination hidden by the search filter is cleared, so no quote goes out for an invisible token", async ({ page }) => {
+  const calls = await setup(page);
+  await page.goto("/#/swap");
+  await page.locator("#sw-amount").fill("1.5");
+  await page.locator("#sw-dest").selectOption(WNEAR);
+  await page.locator("#sw-search").fill("nop");
+  await expect(page.locator("#sw-dest option")).toHaveCount(1);
+  await page.getByRole("button", { name: "Get quote" }).click();
+  await expect(page.locator("#sw-error")).toHaveText("Choose the token to swap to.");
+  expect(calls.some((c) => c.path === "/api/swaps/quote")).toBe(false);
+  // Clearing the filter does not silently re-select the old token either.
+  await page.locator("#sw-search").fill("");
+  await expect(page.locator("#sw-dest")).toHaveValue("");
+});
+
+test("New swap returns to the form at once, before balances reload", async ({ page }) => {
+  await setup(page, { holdReload: true });
+  await page.goto("/#/swap");
+  await page.locator("#sw-amount").fill("1.5");
+  await page.locator("#sw-dest").selectOption(WNEAR);
+  await page.getByRole("button", { name: "Get quote" }).click();
+  await page.getByRole("button", { name: "Sign in wallet" }).click();
+  await page.clock.runFor(5_100);
+  await page.getByRole("button", { name: "New swap" }).click();
+  await expect(page.locator("#sw-form")).toBeVisible();
+  await expect(page.locator("#sw-amount")).toHaveValue("");
 });

@@ -420,6 +420,7 @@ export async function submitTransfer(deps: TransferDeps, user: User, body: { dep
     if (b && b.source === "manexus" && b.invoice_status !== "issued") throw new HttpError(409, "The vendor invoice is no longer payable");
   }
 
+  // See the updated_at INVARIANT above unsignedForGood: `ts` is checked-unexpired, so these writes stay <= deadline.
   const ts = now.toISOString();
   const claim = await db
     .prepare("UPDATE withdrawals SET status = 'PROCESSING', updated_at = ? WHERE deposit_address = ? AND owner = ? AND status = 'AWAITING_SIGNATURE'")
@@ -460,13 +461,24 @@ function trimmed(s: SwapStatus): string {
   });
 }
 
+/** Whether `refreshTransfer` would ask 1Click about this row now: relay attempted, not terminal, not throttled. */
+function stale(row: Raw, now: Date): boolean {
+  const attempted = row.status !== "AWAITING_SIGNATURE" || upstreamOf(row).submitAttemptedAt !== undefined;
+  const fresh = now.getTime() - time(row.updated_at) < REFRESH_THROTTLE_MS;
+  return attempted && !TERMINAL.has(row.status) && !fresh;
+}
+
+/** The stored view without asking 1Click, and whether a `refreshTransfer` would ask it now. 404 when unknown. */
+export async function peekTransfer(deps: Pick<TransferDeps, "db" | "now">, user: User, depositAddress: string): Promise<{ view: TransferView; stale: boolean }> {
+  const row = await load(deps.db, user, depositAddress);
+  return { view: toView(row, deps.now), stale: stale(row, deps.now) };
+}
+
 /** Current status from 1Click. Upstream errors return the stored state with `refreshError`. */
 export async function refreshTransfer(deps: TransferDeps, user: User, depositAddress: string): Promise<TransferView> {
   const { db, oneclick, now } = deps;
   const row = await load(db, user, depositAddress);
-  const attempted = row.status !== "AWAITING_SIGNATURE" || upstreamOf(row).submitAttemptedAt !== undefined;
-  const fresh = now.getTime() - time(row.updated_at) < REFRESH_THROTTLE_MS;
-  if (!attempted || TERMINAL.has(row.status) || fresh) return toView(row, now);
+  if (!stale(row, now)) return toView(row, now);
   let s: SwapStatus;
   try {
     s = await oneclick.status(row.deposit_address);
@@ -490,6 +502,7 @@ export async function refreshTransfer(deps: TransferDeps, user: User, depositAdd
       .run();
     return toView(await load(db, user, row.deposit_address), now);
   }
+  // A successful 1Click read: the only writer allowed to stamp updated_at after the deadline (INVARIANT above unsignedForGood).
   const status = hold ? row.status : s.status;
   await db
     .prepare("UPDATE withdrawals SET status = ?, upstream = ?, updated_at = ? WHERE deposit_address = ? AND owner = ? AND status = ?")
@@ -498,6 +511,12 @@ export async function refreshTransfer(deps: TransferDeps, user: User, depositAdd
   return toView(await load(db, user, row.deposit_address), now);
 }
 
+// INVARIANT (updated_at): only a successful upstream read (refreshTransfer after oneclick.status) may write
+// updated_at with a time after the quote deadline. Every other writer — the INSERT at quote time and the three
+// submitTransfer updates, which all stamp `ts` taken after the "unexpired" check — writes a time at or before the
+// deadline. unsignedForGood relies on this: an updated_at past deadline + SUBMIT_GRACE_MS proves 1Click was
+// asked after the grace period and still had not seen the transfer. Bill and payroll re-quotes (double-pay
+// protection) depend on it, so do not add a writer that stamps updated_at later without a real 1Click read.
 /** A failed relay may still have reached NEAR Intents: wait this long past the deadline before calling it unsigned. */
 export const SUBMIT_GRACE_MS = 120_000;
 

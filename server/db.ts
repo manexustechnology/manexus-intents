@@ -4,4 +4,8 @@ export type Stmt = {
   all<T>(): Promise<{ results: T[] }>;
   run(): Promise<{ meta: { changes: number } }>;
 };
-export type Db = { prepare(sql: string): { bind(...v: unknown[]): Stmt } };
+export type Db = {
+  prepare(sql: string): { bind(...v: unknown[]): Stmt };
+  /** Run bound statements in order as one transaction (D1 `batch`): all apply, or none do. */
+  batch(stmts: Stmt[]): Promise<{ meta: { changes: number } }[]>;
+};

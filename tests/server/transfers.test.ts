@@ -15,6 +15,8 @@ import {
   quoteTransfer,
   refreshTransfer,
   submitTransfer,
+  SUBMIT_GRACE_MS,
+  unsignedForGood,
   type TransferDeps,
   type TransferRequest,
 } from "../../server/transfers.ts";
@@ -335,4 +337,39 @@ test("GET /api/transfers?kind= lists by kind and rejects an unknown kind", async
   assert.deepEqual(((await res.json()) as { depositAddress: string }[]).map((x) => x.depositAddress), [swap]);
   assert.equal(((await (await call("")).json()) as unknown[]).length, 2);
   assert.equal((await call("?kind=gift")).status, 400);
+});
+
+test("updated_at invariant: only a successful 1Click read stamps updated_at after the deadline (unsignedForGood relies on it)", async () => {
+  const db = createTestDb();
+  let statusOk = false;
+  const f = fakes({
+    status: async () => {
+      if (!statusOk) throw new Error("down");
+      return { status: "PENDING_DEPOSIT", updatedAt: "t", originTxHashes: [], destinationTxHashes: [] };
+    },
+  });
+  const qt = await quoteTransfer(deps(db, f), NEAR_USER, swapReq());
+  const deadline = new Date(qt.deadline).getTime();
+  // A relay that fails: the row goes back to AWAITING_SIGNATURE with an attempt recorded; its writes stamp a pre-deadline time.
+  f.oneclick.submitIntent = async () => {
+    throw new Error("network");
+  };
+  await assert.rejects(submitTransfer(deps(db, f), NEAR_USER, { depositAddress: qt.depositAddress, signedData: { standard: "nep413", payload: qt.intent.payload, ...NEP_SIG } }), { status: 502 });
+  const updatedAt = async () => (await db.prepare("SELECT updated_at FROM withdrawals WHERE deposit_address = ?").bind(qt.depositAddress).first<{ updated_at: string }>())!.updated_at;
+  assert.ok(new Date(await updatedAt()).getTime() <= deadline);
+
+  // After the grace period, a failed upstream read writes nothing and cannot prove the relay missed.
+  const late = new Date(deadline + SUBMIT_GRACE_MS + 60_000);
+  const failed = await refreshTransfer(deps(db, f, late), NEAR_USER, qt.depositAddress);
+  assert.ok(failed.refreshError);
+  assert.ok(new Date(await updatedAt()).getTime() <= deadline);
+  assert.equal(await unsignedForGood(deps(db, f, late), NEAR_USER, failed), false);
+  assert.equal(await unsignedForGood(deps(db, f, late), NEAR_USER, { ...failed, refreshError: undefined }), false);
+
+  // A successful read after the grace period stamps updated_at and only then proves the quote is unsigned for good.
+  statusOk = true;
+  const ok = await refreshTransfer(deps(db, f, late), NEAR_USER, qt.depositAddress);
+  assert.equal(ok.status, "AWAITING_SIGNATURE");
+  assert.equal(await updatedAt(), late.toISOString());
+  assert.equal(await unsignedForGood(deps(db, f, late), NEAR_USER, ok), true);
 });

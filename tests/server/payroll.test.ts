@@ -304,3 +304,99 @@ test("line errors travel in the error body; payroll routes require a session", a
   const list = await batchesGet({ request: new Request(url, { headers: { cookie } }), env } as never);
   assert.deepEqual([list.status, await list.json()], [200, []]);
 });
+
+// --- polling cost, atomic create, concurrent quotes ---
+
+test("getBatch: tokens fetched once; at most 10 stale in-flight lines refreshed per call, at most 5 at a time, stalest first", async () => {
+  const db = createTestDb();
+  const f = fakes({ balance: "100000000" });
+  const names = Array.from({ length: 12 }, (_, k) => `P${k + 1}`);
+  const v = await createBatchFromBody(deps(db, f), ALICE, { title: "Big", originAsset: USDC, csv: csv(...names.map((n) => `${n},near-intents,USDC,${n.toLowerCase()}.near,1`)) });
+  const deps12: string[] = [];
+  for (let n = 1; n <= 12; n++) {
+    const q = await quoteBatchLine(deps(db, f), ALICE, v.batch.id, n);
+    await submitTransfer(deps(db, f), ALICE, signed(q));
+    f.settle(q.depositAddress, "PROCESSING");
+    deps12.push(q.depositAddress);
+  }
+  let tokenCalls = 0;
+  const tokens = f.oneclick.tokens;
+  f.oneclick.tokens = async () => (tokenCalls++, tokens());
+  let inFlight = 0, maxInFlight = 0;
+  const asked: string[] = [];
+  const real = f.oneclick.status;
+  f.oneclick.status = async (dep: string) => {
+    asked.push(dep);
+    maxInFlight = Math.max(maxInFlight, ++inFlight);
+    await new Promise((r) => setTimeout(r, 5));
+    inFlight--;
+    return real(dep);
+  };
+
+  const b1 = await getBatch(deps(db, f, at(1)), ALICE, v.batch.id);
+  assert.equal(tokenCalls, 1);
+  assert.equal(asked.length, 10);
+  assert.ok(maxInFlight <= 5 && maxInFlight >= 2, `max in flight ${maxInFlight}`);
+  assert.deepEqual(asked.slice().sort(), deps12.slice(0, 10).sort());
+  // Lines left for the next poll are still shown from the stored state.
+  assert.equal(b1.lines.length, 12);
+  assert.deepEqual(b1.summary, { sent: 0, processing: 12, awaiting: 0, failed: 0, total: 12 });
+
+  // Next poll: the two lines not refreshed last time are the stalest and go first.
+  asked.length = 0;
+  await getBatch(deps(db, f, at(2)), ALICE, v.batch.id);
+  assert.equal(asked.length, 10);
+  assert.ok(asked.includes(deps12[10]) && asked.includes(deps12[11]));
+});
+
+test("createBatch writes the batch and its lines in one db.batch (one D1 transaction): a failing line insert leaves nothing", async () => {
+  const inner = createTestDb();
+  const f = fakes();
+  let batches = 0;
+  let breakLines = false;
+  const db: Db = {
+    prepare(sql: string) {
+      const p = inner.prepare(sql);
+      return {
+        bind(...v: unknown[]) {
+          if (breakLines && sql.includes("INSERT INTO payroll_lines")) {
+            const rows = JSON.parse(v[1] as string) as Record<string, unknown>[];
+            rows[rows.length - 1].name = null; // NOT NULL violation inside the transaction
+            v = [v[0], JSON.stringify(rows)];
+          }
+          return p.bind(...v);
+        },
+      };
+    },
+    batch(stmts) {
+      batches++;
+      return inner.batch(stmts);
+    },
+  };
+  await createBatchFromBody(deps(db, f), ALICE, { title: "Oct", originAsset: USDC, csv: fiveLines });
+  assert.equal(batches, 1);
+  assert.equal(await count(inner, "payroll_batches"), 1);
+  assert.equal(await count(inner, "payroll_lines"), 5);
+  breakLines = true;
+  await assert.rejects(createBatchFromBody(deps(db, f), ALICE, { title: "Nov", originAsset: USDC, csv: fiveLines }));
+  assert.equal(batches, 2);
+  assert.equal(await count(inner, "payroll_batches"), 1);
+  assert.equal(await count(inner, "payroll_lines"), 5);
+});
+
+test("concurrent quotes for one line: the line's deposit address changes between check and guarded UPDATE, the loser deletes its row and gets 409", async () => {
+  const db = createTestDb();
+  const f = fakes();
+  const v = await createBatchFromBody(deps(db, f), ALICE, { title: "Oct", originAsset: USDC, csv: fiveLines });
+  const results = await Promise.allSettled([quoteBatchLine(deps(db, f), ALICE, v.batch.id, 1), quoteBatchLine(deps(db, f), ALICE, v.batch.id, 1)]);
+  const won = results.filter((r): r is PromiseFulfilledResult<Awaited<ReturnType<typeof quoteBatchLine>>> => r.status === "fulfilled");
+  const lost = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
+  assert.equal(won.length, 1);
+  assert.equal(lost.length, 1);
+  assert.deepEqual([lost[0].reason.status, lost[0].reason.message], [409, "This line changed elsewhere. Reload and try again."]);
+  assert.equal(f.calls.quote.length, 2); // both passed the check before either UPDATE
+  const { results: rows } = await db.prepare("SELECT deposit_address FROM withdrawals WHERE batch_id = ?").bind(v.batch.id).all<{ deposit_address: string }>();
+  assert.deepEqual(rows.map((r) => r.deposit_address), [won[0].value.depositAddress]);
+  const b = await getBatch(deps(db, f), ALICE, v.batch.id);
+  assert.equal(b.lines[0].depositAddress, won[0].value.depositAddress);
+});

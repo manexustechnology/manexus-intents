@@ -311,6 +311,7 @@ test("guarded UPDATE: a payment recorded by another refresh between read and wri
   const { db, inv, oneclick } = await setup({ dep1: swap("SUCCESS") });
   let raced = false;
   const racing: typeof db = {
+    batch: (stmts) => db.batch(stmts),
     prepare(sql: string) {
       const p = db.prepare(sql);
       return {

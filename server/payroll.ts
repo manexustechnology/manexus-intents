@@ -13,6 +13,7 @@ import { HttpError } from "./http.ts";
 import type { OneClickToken, createOneClick } from "./oneclick.ts";
 import {
   openQuote,
+  peekTransfer,
   quoteTransfer,
   refreshTransfer,
   unsignedForGood,
@@ -62,6 +63,9 @@ const MAX_TITLE = 100;
 const ID = /^[A-Za-z0-9_-]{1,64}$/;
 const DIGITS = /^[1-9][0-9]{0,77}$/;
 const LINE_SLIPPAGE_BPS = 100;
+/** Per batch view: ask 1Click about at most this many in-flight lines (stalest first), this many at a time. */
+const REFRESH_PER_VIEW = 10;
+const REFRESH_CONCURRENCY = 5;
 
 const isRec = (v: unknown): v is Rec => typeof v === "object" && v !== null && !Array.isArray(v);
 const batchNotFound = () => new HttpError(404, "Batch not found");
@@ -150,7 +154,7 @@ function titleOf(v: unknown): string {
  * line against the quote's `amountIn` when they are sent.
  */
 export async function createBatch(
-  deps: TransferDeps, user: User, input: { title: string; originAsset: string; rows: BatchRowInput[] },
+  deps: TransferDeps, user: User, input: { title: string; originAsset: string; rows: BatchRowInput[] }, listed?: OneClickToken[],
 ): Promise<BatchView> {
   const { db, now } = deps;
   const i = isRec(input) ? input : ({} as Rec);
@@ -161,7 +165,7 @@ export async function createBatch(
   if (!Array.isArray(rows) || rows.length === 0) throw new HttpError(400, "Add at least one line.");
   if (rows.length > MAX_PAYROLL_LINES) throw new HttpError(400, `A payout can have at most ${MAX_PAYROLL_LINES} lines.`);
 
-  const tokens = await deps.oneclick.tokens();
+  const tokens = listed ?? (await deps.oneclick.tokens());
   const errors: LineError[] = [];
   const seen = new Map<string, number>();
   const clean: Omit<BatchRowInput, "line">[] = [];
@@ -196,34 +200,33 @@ export async function createBatch(
   if ((n?.n ?? 0) >= MAX_BATCHES) throw new HttpError(429, `You can keep at most ${MAX_BATCHES} payouts.`);
 
   const id = crypto.randomUUID();
-  await db.prepare("INSERT INTO payroll_batches (id, owner, title, origin_asset, created_at) VALUES (?, ?, ?, ?, ?)").bind(id, user.account, title, originAsset, now.toISOString()).run();
-  // One statement for every line (D1 caps bound parameters per query; a single INSERT is atomic).
-  let inserted = 0;
-  try {
-    const r = await db
+  // Batch row and every line in one db.batch: D1 runs it as a single transaction, so a payout is stored
+  // whole or not at all. One INSERT … json_each for all lines (D1 caps bound parameters per statement).
+  const [, lines] = await db.batch([
+    db.prepare("INSERT INTO payroll_batches (id, owner, title, origin_asset, created_at) VALUES (?, ?, ?, ?, ?)").bind(id, user.account, title, originAsset, now.toISOString()),
+    db
       .prepare(
         `INSERT INTO payroll_lines (batch_id, n, name, destination_asset, recipient_type, recipient, amount, deposit_address)
          SELECT ?, CAST(j.key AS INTEGER) + 1, json_extract(j.value, '$.name'), json_extract(j.value, '$.destinationAsset'),
                 json_extract(j.value, '$.recipientType'), json_extract(j.value, '$.recipient'), json_extract(j.value, '$.amount'), NULL
          FROM json_each(?) AS j`,
       )
-      .bind(id, JSON.stringify(clean))
-      .run();
-    inserted = r.meta.changes;
-  } finally {
-    if (inserted !== clean.length) {
-      await db.prepare("DELETE FROM payroll_lines WHERE batch_id = ?").bind(id).run();
-      await db.prepare("DELETE FROM payroll_batches WHERE id = ? AND owner = ?").bind(id, user.account).run();
-    }
+      .bind(id, JSON.stringify(clean)),
+  ]);
+  if (lines?.meta.changes !== clean.length) {
+    await db.batch([
+      db.prepare("DELETE FROM payroll_lines WHERE batch_id = ?").bind(id),
+      db.prepare("DELETE FROM payroll_batches WHERE id = ? AND owner = ?").bind(id, user.account),
+    ]);
+    throw new HttpError(500, "Could not save the payout");
   }
-  if (inserted !== clean.length) throw new HttpError(500, "Could not save the payout");
-  return getBatch(deps, user, id);
+  return batchView(deps, user, id, tokens);
 }
 
 /** Rows from a CSV upload (`csv`) or from saved payees (`payeeIds` with matching decimal `amounts`). */
-async function rowsFromBody(deps: TransferDeps, user: User, b: Rec): Promise<BatchRowInput[]> {
+async function rowsFromBody(deps: TransferDeps, user: User, b: Rec, tokens: OneClickToken[]): Promise<BatchRowInput[]> {
   if (typeof b.csv === "string") {
-    const { rows, errors } = parsePayrollCsv(b.csv, await deps.oneclick.tokens());
+    const { rows, errors } = parsePayrollCsv(b.csv, tokens);
     if (errors.length) throw invalidLines(errors);
     return rows.map((r) => ({ line: r.line, name: r.name, destinationAsset: r.destinationAsset, recipientType: r.recipientType, recipient: r.recipient, amount: r.amount }));
   }
@@ -231,7 +234,6 @@ async function rowsFromBody(deps: TransferDeps, user: User, b: Rec): Promise<Bat
   if (!Array.isArray(ids) || !Array.isArray(amounts) || ids.length !== amounts.length) throw new HttpError(400, "Upload a CSV file or choose payees.");
   if (ids.length === 0) throw new HttpError(400, "Add at least one line.");
   if (ids.length > MAX_PAYROLL_LINES) throw new HttpError(400, `A payout can have at most ${MAX_PAYROLL_LINES} lines.`);
-  const tokens = await deps.oneclick.tokens();
   const errors: LineError[] = [];
   const rows: BatchRowInput[] = [];
   for (let k = 0; k < ids.length; k++) {
@@ -266,8 +268,9 @@ export async function createBatchFromBody(deps: TransferDeps, user: User, body: 
   const b = isRec(body) ? body : {};
   const title = titleOf(b.title);
   if (typeof b.originAsset !== "string") throw new HttpError(400, "Choose a token from your balance.");
-  const rows = await rowsFromBody(deps, user, b);
-  return createBatch(deps, user, { title, originAsset: b.originAsset, rows });
+  const tokens = await deps.oneclick.tokens(); // once per request: parsing, validation and the returned view
+  const rows = await rowsFromBody(deps, user, b, tokens);
+  return createBatch(deps, user, { title, originAsset: b.originAsset, rows }, tokens);
 }
 
 async function loadBatch(db: Db, user: User, id: unknown): Promise<BatchRaw> {
@@ -340,16 +343,60 @@ async function lineRows(db: Db, batchId: string): Promise<LineRaw[]> {
   return results.map((r) => ({ ...r, n: Number(r.n) }));
 }
 
-/** The batch with every line's latest transfer (refreshed) and the derived summary. */
+/** Run `fn` over `items` with at most `limit` calls in flight. */
+async function pool<T>(items: T[], limit: number, fn: (x: T) => Promise<void>): Promise<void> {
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) await fn(items[next++]);
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+}
+
+/**
+ * Every line's latest transfer. In-flight lines due for a 1Click check are refreshed, but at most
+ * REFRESH_PER_VIEW per call (stalest first, REFRESH_CONCURRENCY at a time); the rest show their stored
+ * state and are refreshed on the next poll. A stored state is never less cautious: an expired quote
+ * after a failed relay stays "checking" until a real 1Click read proves otherwise.
+ */
+async function lineTransfers(deps: TransferDeps, user: User, raws: LineRaw[]): Promise<{ views: (TransferView | undefined)[]; refreshError?: string }> {
+  const views: (TransferView | undefined)[] = [];
+  const due: { k: number; updatedAt: string }[] = [];
+  for (const [k, l] of raws.entries()) {
+    if (!l.deposit_address) {
+      views.push(undefined);
+      continue;
+    }
+    try {
+      const p = await peekTransfer(deps, user, l.deposit_address);
+      views.push(p.view);
+      if (p.stale) due.push({ k, updatedAt: p.view.updatedAt });
+    } catch (e) {
+      if (!(e instanceof HttpError && e.status === 404)) throw e;
+      views.push(undefined);
+    }
+  }
+  due.sort((a, b) => (a.updatedAt < b.updatedAt ? -1 : a.updatedAt > b.updatedAt ? 1 : a.k - b.k));
+  let refreshError: string | undefined;
+  await pool(due.slice(0, REFRESH_PER_VIEW), REFRESH_CONCURRENCY, async ({ k }) => {
+    const t = await refreshTransfer(deps, user, raws[k].deposit_address!);
+    views[k] = t;
+    refreshError ??= t.refreshError;
+  });
+  return { views, ...(refreshError ? { refreshError } : {}) };
+}
+
+/** The batch with every line's latest transfer (see `lineTransfers`) and the derived summary. */
 export async function getBatch(deps: TransferDeps, user: User, id: string): Promise<BatchView> {
+  return batchView(deps, user, id, await listedTokens(deps));
+}
+
+async function batchView(deps: TransferDeps, user: User, id: string, tokens: OneClickToken[]): Promise<BatchView> {
   const b = await loadBatch(deps.db, user, id);
   const raws = await lineRows(deps.db, b.id);
-  const tokens = await listedTokens(deps);
+  const { views, refreshError } = await lineTransfers(deps, user, raws);
   const lines: BatchLine[] = [];
-  let refreshError: string | undefined;
-  for (const l of raws) {
-    const transfer = await lineTransfer(deps, user, l);
-    refreshError ??= transfer?.refreshError;
+  for (const [k, l] of raws.entries()) {
+    const transfer = views[k];
     const { state, canQuote } = await lineState(deps, user, transfer);
     const t = tokenInfo(l.destination_asset, tokens);
     const pendingQuote = await openQuote(deps.db, user, transfer);

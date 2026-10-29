@@ -36,7 +36,11 @@ const STATE_CLASS: Record<LineState, string> = {
   processing: "status-bill-paying", sent: "status-bill-paid", failed: "outcome-failed", refunded: "outcome-refunded",
 };
 
+/** The per-line button may (re)send this line now. */
 const sendable = (l: Line) => l.canQuote || !!l.pendingQuote;
+/** "Send next" / "Send all" pick only lines never sent or with an open quote; failed, refunded and
+ * expired lines are retried only with their own button, so a bulk run never re-attempts a payment. */
+const bulkSendable = (l: Line) => (l.state === "unsent" && l.canQuote) || !!l.pendingQuote;
 
 /** "3/5 sent, 1 failed, 1 awaiting" (zero counts left out). */
 export function progressText(s: View["summary"]): string {
@@ -65,7 +69,7 @@ export function mountPayrollBatch(el: HTMLElement, params: Record<string, string
   function targets(t: Target): Line[] {
     const lines = view?.lines ?? [];
     if (typeof t === "number") return lines.filter((l) => l.n === t && sendable(l));
-    const s = lines.filter(sendable);
+    const s = lines.filter(bulkSendable);
     return t === "next" ? s.slice(0, 1) : s;
   }
 
@@ -76,7 +80,7 @@ export function mountPayrollBatch(el: HTMLElement, params: Record<string, string
     }
     const v = view;
     const running = step.kind === "running" || step.kind === "register";
-    const any = v.lines.some(sendable);
+    const any = v.lines.some(bulkSendable);
     const actions =
       step.kind === "view" && any
         ? `<div class="invoice-actions"><button class="textbutton" type="button" id="send-next">Send next</button><button class="primary" type="button" id="send-all">Send all</button></div>`

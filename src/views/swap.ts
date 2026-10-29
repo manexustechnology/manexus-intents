@@ -28,10 +28,13 @@ export function swapRate(amountIn: bigint, originDecimals: number, amountOut: bi
   return `${r / 1_000_000n}.${(r % 1_000_000n).toString().padStart(6, "0")}`;
 }
 
-/** Dollar value (cents, integer math) of `units` at a token's reference price; undefined without a usable price. */
+/** Dollar value (cents, integer math) of `units` at a token's reference price; undefined without a usable price
+ * (missing, non-positive, or so small that it rounds to 0 micro-dollars — never shown as "$0.00"). */
 export function usdValue(units: bigint, decimals: number, price: number | undefined): string | undefined {
   if (price === undefined || !Number.isFinite(price) || price <= 0) return undefined;
-  const cents = (units * BigInt(Math.round(price * 1e6))) / (10n ** BigInt(decimals) * 10_000n);
+  const micro = BigInt(Math.round(price * 1e6));
+  if (micro <= 0n) return undefined;
+  const cents = (units * micro) / (10n ** BigInt(decimals) * 10_000n);
   return `${cents / 100n}.${(cents % 100n).toString().padStart(2, "0")}`;
 }
 
@@ -73,13 +76,21 @@ export function mountSwap(el: HTMLElement): () => void {
     wire();
   }
 
+  /** Destination options under the current search. A selected destination that is not among them is cleared,
+   * so a quote can never go out for a token the user cannot see. */
+  function destOptions(): { matches: Token[]; shown: Token[] } {
+    const s = form.search.trim().toLowerCase();
+    const matches = tokens.filter((t) => t.assetId !== form.origin && (!s || tokenLabel(t).toLowerCase().includes(s) || t.blockchain.includes(s)));
+    const shown = matches.slice(0, MAX_OPTIONS);
+    if (form.dest && !shown.some((t) => t.assetId === form.dest)) form.dest = "";
+    return { matches, shown };
+  }
+
   function formHtml(): string {
     if (!balances.length)
       return `<section class="panel"><h2>Nothing to swap yet</h2><p class="muted">Your NEAR Intents balance is empty. Paid invoices land there.</p></section>`;
     const b = balanceOf(form.origin);
-    const s = form.search.trim().toLowerCase();
-    const matches = tokens.filter((t) => t.assetId !== form.origin && (!s || tokenLabel(t).toLowerCase().includes(s) || t.blockchain.includes(s)));
-    const shown = matches.slice(0, MAX_OPTIONS);
+    const { matches, shown } = destOptions();
     return `<section class="panel"><form id="sw-form" novalidate>
 <label>From your balance<select id="sw-origin"><option value="">Choose a balance</option>${balances
       .map((x) => `<option value="${esc(x.tokenId)}" ${x.tokenId === form.origin ? "selected" : ""}>${esc(x.formatted)} ${esc(x.symbol)} (${esc(chainName(x.blockchain))})</option>`)
@@ -155,6 +166,7 @@ ${TERMINAL.has(t.status) ? `<button class="primary" type="button" id="sw-new">Ne
         step = { kind: "form" };
         form.amount = "";
         error = "";
+        draw();
         void reload();
       });
     }

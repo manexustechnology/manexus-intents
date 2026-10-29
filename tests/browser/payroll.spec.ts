@@ -169,3 +169,21 @@ test("a failed line can be retried on its own", async ({ page }) => {
   await expect(page.locator("#batch-progress")).toHaveText("3/3 sent");
   expect(quoted(calls)).toEqual([2]);
 });
+
+test("send all sends only never-sent lines and open quotes; a failed line is retried only with its own button", async ({ page }) => {
+  const { calls } = await setup(page, { states: ["failed", "unsent", "awaiting"] });
+  await page.goto("/#/payroll/p1");
+  await page.getByRole("button", { name: "Send all" }).click();
+  await expect(page.locator("#batch-confirm h2")).toHaveText("Send 2 payments");
+  await page.locator("#run-confirm").check();
+  await page.getByRole("button", { name: "Start sending" }).click();
+  await expect(page.locator("#line-3 .badge")).toHaveText("Sent");
+  await expect(page.locator("#line-2 .badge")).toHaveText("Sent");
+  await expect(page.locator("#line-1 .badge")).toHaveText("Failed");
+  expect(quoted(calls)).toEqual([2]);
+  expect(calls.filter((c) => c.path === "/api/transfers/submit").map((c) => (c.body as { depositAddress: string }).depositAddress).sort()).toEqual([dep(2), dep(3)]);
+  // Only the failed line is left: no bulk buttons, just its Retry.
+  await expect(page.getByRole("button", { name: "Send all" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Send next" })).toHaveCount(0);
+  await expect(page.locator("#line-1").getByRole("button", { name: "Retry" })).toBeVisible();
+});

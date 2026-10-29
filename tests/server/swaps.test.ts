@@ -71,3 +71,14 @@ test("slippage outside 0.5/1/3 % is 400", async () => {
   await assert.rejects(quoteSwap(deps, USER, body({ slippageBps: undefined })), { status: 400 });
   assert.equal(quotes.length, 0);
 });
+
+test("a client-supplied recipient or recipientType in the body is ignored: the swap always lands in the owner's own account", async () => {
+  const { deps, quotes, db } = setup();
+  const q = await quoteSwap(deps, USER, body({ recipient: "mallory.near", recipientType: "DESTINATION_CHAIN", swapType: "EXACT_OUTPUT" }));
+  assert.equal(quotes[0].recipient, USER.account);
+  assert.equal(quotes[0].recipientType, "INTENTS");
+  assert.equal(quotes[0].swapType, "EXACT_INPUT");
+  assert.equal(q.transfer.recipient, USER.account);
+  const row = await db.prepare("SELECT recipient FROM withdrawals").bind().first<{ recipient: string }>();
+  assert.equal(row?.recipient, USER.account);
+});
