@@ -369,3 +369,27 @@ test("a failed submit stays visible in history and is refreshed from 1Click", as
   assert.equal((await refreshWithdrawal(deps(db, f, later(120)), NEAR_USER, DEP)).status, "PROCESSING");
   assert.equal(f.calls.status.length, 2);
 });
+
+test("a refresh racing a slow submit keeps PROCESSING, so a later submit failure still reverts", async () => {
+  let release!: (fail: boolean) => void;
+  const gate = new Promise<boolean>((r) => (release = r));
+  const { db, f, q } = await quoted(NEAR_USER, {
+    submit: async () => {
+      if (await gate) throw new HttpError(502, "NEAR Intents: boom");
+      return { intentHash: "H" };
+    },
+    status: async () => swap("PENDING_DEPOSIT"),
+  });
+  const submitting = status(submitWithdrawal(deps(db, f), NEAR_USER, { depositAddress: DEP, signedData: nepSigned(q.intent.payload) }));
+  await new Promise((r) => setImmediate(r));
+  assert.equal(f.calls.submit.length, 1, "submit is in flight");
+  const mid = await refreshWithdrawal(deps(db, f, new Date(NOW.getTime() + 60_000)), NEAR_USER, DEP);
+  assert.equal(f.calls.status.length, 1);
+  assert.equal(mid.status, "PROCESSING");
+  assert.equal((await rowOf(db))?.status, "PROCESSING");
+  release(true);
+  assert.equal(await submitting, 502);
+  const row = await rowOf(db);
+  assert.equal(row?.status, "AWAITING_SIGNATURE");
+  assert.match(String(row?.upstream), /submitError/);
+});

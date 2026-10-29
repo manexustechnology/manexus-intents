@@ -340,12 +340,16 @@ export async function refreshWithdrawal(deps: WithdrawDeps, user: User, depositA
     return { ...toView(row, now), refreshError: e instanceof HttpError ? e.message : "NEAR Intents is unreachable" };
   }
   if (s.depositAddress !== undefined && s.depositAddress !== row.deposit_address) return { ...toView(row, now), refreshError: "NEAR Intents returned an unexpected response" };
-  // An unsigned/failed-submit row stays AWAITING_SIGNATURE until 1Click has seen the transfer.
-  const status = row.status === "AWAITING_SIGNATURE" && s.status === "PENDING_DEPOSIT" ? "AWAITING_SIGNATURE" : s.status;
+  // Until 1Click has seen the transfer, keep our own state: an unsigned/failed-submit row stays
+  // AWAITING_SIGNATURE, and a submit still in flight (PROCESSING, no intent hash yet) stays PROCESSING
+  // so that submit's failure revert (which requires PROCESSING) still applies.
+  const unseen = s.status === "PENDING_DEPOSIT";
+  const hold = unseen && (row.status === "AWAITING_SIGNATURE" || (row.status === "PROCESSING" && row.intent_hash == null));
+  const status = hold ? row.status : s.status;
   const ts = now.toISOString();
   await db
     .prepare("UPDATE withdrawals SET status = ?, upstream = ?, updated_at = ? WHERE deposit_address = ? AND owner = ? AND status = ?")
-    .bind(status, status === "AWAITING_SIGNATURE" ? row.upstream : trimmed(s), ts, row.deposit_address, user.account, row.status)
+    .bind(status, hold ? row.upstream : trimmed(s), ts, row.deposit_address, user.account, row.status)
     .run();
   return toView(await load(db, user, row.deposit_address), now);
 }
