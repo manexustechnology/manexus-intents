@@ -331,8 +331,9 @@ export async function enforceLimits(
   req: Pick<TransferRequest, "kind" | "originAsset" | "destinationAsset" | "recipientType" | "recipient" | "billId">,
   amountLeaving: bigint, opts: { committedOnly?: boolean; exclude?: string; dailyOnly?: boolean } = {},
 ): Promise<void> {
-  // A swap stays in the owner's own account (server/swaps.ts); anything sent elsewhere is limited.
-  if (req.kind === "swap" && req.recipient === user.account) return;
+  // A swap stays in the owner's own Intents account (server/swaps.ts); anything sent elsewhere, including to
+  // another chain, is limited.
+  if (req.kind === "swap" && req.recipientType === "INTENTS" && req.recipient === user.account) return;
   const row = await loadPolicy(deps.db, user.account);
   const l = row ? parsedRow(row).limits : undefined;
   if (!l) return;

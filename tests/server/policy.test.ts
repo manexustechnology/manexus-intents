@@ -461,6 +461,8 @@ test("swaps are exempt from caps and the whitelist", async () => {
   await enforceLimits(deps(db), NEAR_USER, swapReq("5000000"), 5000000n);
   // A "swap" that would leave the owner's account is not internal: it is limited like any transfer.
   await rejectsWith(enforceLimits(deps(db), NEAR_USER, { ...swapReq("5000000"), recipient: "bob.near" }, 5000000n), 400, PER_TX);
+  // Nor is one delivered on another chain to an address spelled like the owner's account.
+  await rejectsWith(enforceLimits(deps(db), NEAR_USER, { ...swapReq("5000000"), recipientType: "DESTINATION_CHAIN" }, 5000000n), 400, PER_TX);
 });
 
 test("a swap-kind row sent to another account counts in the 24-hour window", async () => {
