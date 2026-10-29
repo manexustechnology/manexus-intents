@@ -514,3 +514,35 @@ test("getBatch (in-memory rows): an expired quote after a failed relay stays 'ch
   const l = await line(at(14));
   assert.deepEqual([l.state, l.canQuote, l.pendingQuote], ["expired", true, undefined]);
 });
+
+test("after a failed relay the grace runs from the later of the intent and quote deadlines; older rows fall back to the stored deadline", async () => {
+  for (const legacy of [false, true]) {
+    const db = createTestDb();
+    const f = fakes();
+    const v = await createBatchFromBody(deps(db, f), ALICE, { title: "Oct", originAsset: USDC, csv: fiveLines });
+    // The intent expires at +5 min, the quote at +10 min: the stored deadline is the earlier one.
+    const gen = f.oneclick.generateIntent;
+    f.oneclick.generateIntent = async (a) => {
+      const g = await gen(a);
+      const p = g.payload as { message: string };
+      return { ...g, payload: { ...p, message: JSON.stringify({ ...JSON.parse(p.message), deadline: at(5).toISOString() }) } };
+    };
+    const q = await quoteBatchLine(deps(db, f), ALICE, v.batch.id, 1);
+    f.oneclick.generateIntent = gen;
+    assert.equal(q.deadline, at(5).toISOString());
+    const meta = (await db.prepare("SELECT json_extract(intent, '$.meta') AS m FROM withdrawals WHERE deposit_address = ?").bind(q.depositAddress).first<{ m: string }>())!.m;
+    assert.deepEqual([JSON.parse(meta).intentDeadline, JSON.parse(meta).quoteDeadline], [at(5).toISOString(), at(10).toISOString()]);
+    if (legacy)
+      await db.prepare("UPDATE withdrawals SET intent = json_remove(intent, '$.meta.intentDeadline', '$.meta.quoteDeadline') WHERE deposit_address = ?").bind(q.depositAddress).run();
+    f.oneclick.submitIntent = async () => {
+      throw new Error("timeout");
+    };
+    await assert.rejects(submitTransfer(deps(db, f), ALICE, signed(q)));
+    f.settle(q.depositAddress, "PENDING_DEPOSIT");
+    const line = async (now: Date) => (await getBatch(deps(db, f, now), ALICE, v.batch.id)).lines[0].state;
+    // At +8 min a 1Click read is past the old grace (5 + 2) but inside the new one (10 + 2).
+    assert.equal(await line(at(8)), legacy ? "expired" : "checking", `legacy=${legacy}`);
+    assert.equal(await status(quoteBatchLine(deps(db, f, at(8, 10)), ALICE, v.batch.id, 1)), legacy ? 0 : 409);
+    if (!legacy) assert.equal(await line(at(13)), "expired");
+  }
+});

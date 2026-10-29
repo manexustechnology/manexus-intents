@@ -47,6 +47,8 @@ type Meta = {
   amountOut: string; minAmountOut: string;
   // Absent on Plan 1 rows, which were all EXACT_INPUT to a destination chain.
   swapType?: SwapType; recipientType?: RecipientType;
+  // The two deadlines `deadline` is the earlier of. Absent on rows stored before they were recorded.
+  intentDeadline?: string; quoteDeadline?: string;
 };
 type StoredIntent = { standard: Standard; payload: unknown; deadline: string; meta: Meta };
 
@@ -319,6 +321,7 @@ async function prepareChecked(deps: TransferDeps, user: User, c: Checked, q: Quo
     destinationSymbol: c.dest.symbol, destinationBlockchain: c.dest.blockchain, destinationDecimals: c.dest.decimals,
     amountOut: q.amountOut, minAmountOut: q.minAmountOut,
     swapType: c.swapType, recipientType: c.recipientType,
+    intentDeadline: new Date(intentDeadline).toISOString(), quoteDeadline: new Date(quoteDeadline).toISOString(),
   };
   const record: StoredIntent = { standard, payload: intent.payload, deadline, meta };
   const ts = now.toISOString();
@@ -448,6 +451,10 @@ export async function submitTransfer(deps: TransferDeps, user: User, body: { dep
     .prepare(
       "UPDATE withdrawals SET intent_hash = ?, upstream = NULL, status = CASE WHEN status = 'FAILED' THEN 'PROCESSING' ELSE status END, updated_at = ? WHERE deposit_address = ? AND owner = ?",
     )
+    // Overlap (theoretical): once the stuck-submit rule marked this row FAILED, a bill or payroll line may
+    // already have been re-quoted, and this revival makes the original transfer live again next to the new
+    // quote (both could pay). It needs a relay still in flight STUCK_SUBMIT_MS past the stored deadline that
+    // then executes; intents.near refuses an intent after its own deadline, which bounds that window.
     .bind(intentHash.slice(0, 200), ts, row.deposit_address, user.account)
     .run();
   return toView(await load(db, user, row.deposit_address), now);
@@ -587,8 +594,13 @@ export function unsignedForGoodRow(row: Pick<TransferRow, "upstream" | "intent">
   if (!attempted) return true;
   // A relay was attempted and may have landed. Only a successful 1Click check made after the grace period
   // (refreshTransfer's hold path writes updated_at on each one; errors and throttled reads do not) proves
-  // it did not.
-  const graceEnd = time(t.deadline) + SUBMIT_GRACE_MS;
+  // it did not. The grace runs from the later of the intent and quote deadlines: we assume 1Click may still
+  // execute a relayed intent until its quote deadline (docs/NEAR-INTENTS.md). Older rows only stored the
+  // earlier one, `deadline`.
+  const s = parseJson(row.intent);
+  const m = isRec(s) && isRec(s.meta) ? s.meta : {};
+  const later = [m.intentDeadline, m.quoteDeadline].map(time).filter(Number.isFinite);
+  const graceEnd = Math.max(time(t.deadline), ...later) + SUBMIT_GRACE_MS;
   return !t.refreshError && now.getTime() > graceEnd && time(t.updatedAt) > graceEnd;
 }
 
