@@ -1625,3 +1625,5 @@ a.secondary { display: inline-flex; align-items: center; padding: 0 16px; min-he
 .ag-caps { width: 100%; border-collapse: collapse; }
 .ag-caps th, .ag-caps td { text-align: left; padding: 4px 6px; font-size: 13px; }
 .ag-caps input { width: 100%; min-width: 90px; }
+.sign-warning { color: #9a3b1f; background: #fbefe9; border: 1px solid #e6b9a8; border-radius: 8px; padding: 8px 12px; margin: 8px 0; font-size: 13px; font-weight: 600; }
+.sign-warning p { margin: 0; }

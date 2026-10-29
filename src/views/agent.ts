@@ -2,6 +2,7 @@
 // the recipient whitelist. The agent never moves funds: approving a suggestion requests a quote that the owner
 // reviews and signs in their wallet, and every rule or whitelist change is signed as a message.
 import { SETTLEMENT_TOKENS } from "../../shared/assets.ts";
+import { mergeDraft, policyChanges } from "../../shared/policy-diff.ts";
 import { escapeHTML as esc } from "../../shared/text.ts";
 import { baseUnits, formatAmount } from "../../shared/units.ts";
 import { api, ApiError, postJson } from "../api.ts";
@@ -91,7 +92,7 @@ type Flow =
   | { kind: "register"; p: Proposal; quote: Quote; publicKey: string; resolve: () => void; reject: (e: Error) => void }
   | { kind: "track"; p: Proposal; t: TransferView }
   | { kind: "followup"; p: Proposal; payUrl: string };
-type SignStep = { where: "rules" | "whitelist"; title: string; challenge: PolicyChallenge; submit: (signed: { nonce: string; signature: string; publicKey?: string }) => Promise<void> };
+type SignStep = { where: "rules" | "whitelist"; title: string; challenge: PolicyChallenge; /** Pre-escaped HTML shown above the message. */ intro?: string; submit: (signed: { nonce: string; signature: string; publicKey?: string }) => Promise<void> };
 
 export function mountAgent(el: HTMLElement): () => void {
   let alive = true;
@@ -389,7 +390,7 @@ ${t.refreshError ? `<p class="error" role="alert">${esc(t.refreshError)}</p>` : 
 
   function signHtml(s: SignStep): string {
     return `<div class="sign-step" id="ag-sign-step"><h3>${esc(s.title)}</h3><p class="muted">Your wallet will ask you to sign this message. It authorizes this change only and does not send a transaction or move funds.</p>
-<pre class="sign-message" id="ag-sign-message">${esc(s.challenge.message)}</pre>
+${s.intro ?? ""}<pre class="sign-message" id="ag-sign-message">${esc(s.challenge.message)}</pre>
 <p class="error" id="ag-sign-error" role="alert"></p>
 <div class="invoice-actions"><button class="textbutton" type="button" id="ag-sign-cancel">Cancel</button><button class="primary" type="button" id="ag-sign-go">Sign in wallet</button></div></div>`;
   }
@@ -426,13 +427,13 @@ ${t.refreshError ? `<p class="error" role="alert">${esc(t.refreshError)}</p>` : 
     q("#ag-sign-step")?.scrollIntoView?.({ block: "nearest" });
   }
 
-  async function startChange(where: SignStep["where"], title: string, action: unknown, submit: SignStep["submit"]) {
+  async function startChange(where: SignStep["where"], title: string, action: unknown, submit: SignStep["submit"], intro?: string) {
     if (where === "rules") rulesError = rulesNote = "";
     else wlError = wlNote = "";
     try {
       const challenge = await postJson<PolicyChallenge>("/api/agent/policy/challenge", action);
       if (!alive) return;
-      signStep = { where, title, challenge, submit };
+      signStep = { where, title, challenge, submit, ...(intro ? { intro } : {}) };
       drawSign();
     } catch (e) {
       if (where === "rules") rulesError = msg(e);
@@ -475,7 +476,8 @@ ${t.refreshError ? `<p class="error" role="alert">${esc(t.refreshError)}</p>` : 
     try {
       const out = await postJson<{ policy: Policy; notes?: string }>("/api/agent/policy/draft", { text: draftText });
       if (!alive) return;
-      draft = out.policy;
+      // The draft only carries the sections the owner asked to change; every other saved section is kept.
+      draft = mergeDraft(policy, out.policy);
       draftState = { busy: false, error: "", notes: out.notes || "Draft loaded into the rules below." };
       rulesError = "";
       rulesNote = "AI draft loaded. Review it, then save and sign.";
@@ -595,6 +597,10 @@ ${t.refreshError ? `<p class="error" role="alert">${esc(t.refreshError)}</p>` : 
         setText("#ag-rules-error", rulesError);
         return;
       }
+      // What this change does to the saved rules, with a warning for anything it removes or loosens.
+      const diff = policyChanges(policy, next);
+      const intro = (diff.changed.length ? `<p class="fine" id="ag-sign-changes">${draft ? "This draft changes" : "This changes"}: ${esc(diff.changed.join(", "))}</p>` : "")
+        + (diff.loosened.length ? `<div class="sign-warning" id="ag-sign-loosened" role="alert">${diff.loosened.map((w) => `<p>⚠ ${esc(w)}</p>`).join("")}</div>` : "");
       void startChange("rules", "Sign your new rules", { kind: "policy", policy: next }, async (signed) => {
         const saved = await api<{ policy: Policy }>("/api/agent/policy", { method: "PUT", body: JSON.stringify({ policy: next, ...signed }) });
         policy = saved.policy;
@@ -604,7 +610,7 @@ ${t.refreshError ? `<p class="error" role="alert">${esc(t.refreshError)}</p>` : 
         rulesNote = "Rules saved.";
         drawRules();
         void loadProposals(true);
-      });
+      }, intro);
     };
   }
 

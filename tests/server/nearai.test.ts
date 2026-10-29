@@ -241,14 +241,14 @@ test("summary: request body carries numbers and symbols only; reply truncated to
   });
 });
 
-test("draft: at most 5 AI calls per owner per minute, then 429; other owners unaffected; window resets; <= 3 queries", async () => {
+test("draft: at most 5 AI calls per owner per minute, then 429; other owners unaffected; window resets; <= 5 queries", async () => {
   const db = createTestDb();
   const env = envWith({}, db);
   await withUpstream(() => reply('{"version":1}'), async (calls) => {
     for (let i = 0; i < 5; i++) {
       const before = db.queries;
       assert.equal((await post(env, "hello")).status, 200);
-      assert.ok(db.queries - before <= 3, `queries ${db.queries - before}`);
+      assert.ok(db.queries - before <= 5, `queries ${db.queries - before}`);
     }
     const sixth = await post(env, "hello");
     assert.equal(sixth.status, 429);
@@ -274,5 +274,31 @@ test("draft rate counters do not disturb the cached summary", async () => {
     await withUpstream(() => reply('{"version":1}'), async () => assert.equal((await post(env, "hello")).status, 200));
     assert.equal(((await (await summary(env)).json()) as { text: string }).text, "Summary text.");
     assert.equal(calls.length, 1);
+  });
+});
+
+test("draft: prompt carries the owner's current policy, says omitted sections are kept, and lists balance token decimals", async () => {
+  const db = createTestDb();
+  await addWhitelist(db, "w1", ALICE, "Cold wallet");
+  const mine = { version: 1, limits: { perTx: { [USDC]: "50000000" }, daily: {}, whitelistOnly: true } };
+  const theirs = { version: 1, limits: { perTx: { [USDC]: "987654321" }, daily: {}, whitelistOnly: false } };
+  for (const [owner, p] of [[ALICE, mine], [MALLORY, theirs]] as const)
+    await db.prepare("INSERT INTO agent_policies (owner, policy, hash, updated_at) VALUES (?, ?, 'h', 't')").bind(owner, JSON.stringify(p)).run();
+  await db.prepare("INSERT INTO withdrawals (deposit_address, owner, origin_asset, destination_asset, amount, recipient, status, created_at, updated_at, kind) VALUES ('dep1', ?, 'nep141:wrap.near', ?, '1', 'third-party-recipient.near', 'SUCCESS', 't', 't', 'withdraw')").bind(ALICE, USDC).run();
+  const env = envWith({}, db);
+  await withUpstream(() => reply('{"version":1}'), async (calls) => {
+    assert.equal((await post(env, "convert over 75 dollars")).status, 200);
+    const sys = calls[0].body.messages[0].content;
+    assert.ok(sys.includes(JSON.stringify(mine)), "current policy");
+    assert.ok(!sys.includes("987654321"), "another owner's policy");
+    assert.ok(/only the sections/i.test(sys) && /omit[^.]*kept/i.test(sys), "omitted sections are kept");
+    assert.ok(sys.includes('{"tokenId":"nep141:wrap.near","symbol":"wNEAR","decimals":24}'), "balance token decimals");
+    assert.ok(!sys.includes("third-party-recipient") && !sys.includes("dep1"));
+  });
+  // Balances unavailable: the draft still works (settlement tokens only).
+  await resetRate(db);
+  await withUpstream(() => reply('{"version":1}'), async (calls) => {
+    assert.equal((await post(envWith({ NEAR_RPC_URL: "https://rpc-down.test/" }, db), "hello")).status, 200);
+    assert.ok(!calls[0].body.messages[0].content.includes("wrap.near"));
   });
 });

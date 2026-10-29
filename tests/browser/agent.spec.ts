@@ -27,7 +27,7 @@ const POLICY = {
   reminders: { billDueDays: 3, invoiceOverdueDays: 7 },
 };
 
-async function setup(page: Page) {
+async function setup(page: Page, saved: unknown = POLICY) {
   const calls: { path: string; method: string; body: unknown }[] = [];
   let proposals = [
     proposal("p1", "convert", { originAsset: USDT, destinationAsset: USDC, amount: "120000000" }),
@@ -35,7 +35,7 @@ async function setup(page: Page) {
     proposal("p3", "pay_bill", { billId: "b1" }),
     proposal("p4", "follow_up_invoice", { invoiceId: "i1", publicId: "PubId123" }),
   ];
-  let policy: unknown = POLICY;
+  let policy: unknown = saved;
   let whitelist = [{ id: "w1", label: "Binance <i>deposit</i>", destinationAsset: USDC, recipientType: "INTENTS", recipient: "cold.near", createdAt: "t" }];
   await page.route(/^(?!http:\/\/(127\.0\.0\.1|localhost)[:/]).*/, (r) => r.abort());
   await page.route("**/api/**", (r) => {
@@ -252,7 +252,7 @@ test("AI 503 (402/429/timeout) shows a message and the rest of the Agent page ke
 
 test("Discard draft resets the Rules form to the saved policy", async ({ page }) => {
   const calls = await setup(page);
-  const draft = { version: 1, convert: { enabled: false, targetTokenId: USDC, minUsdCents: 7500 }, reminders: { billDueDays: 5, invoiceOverdueDays: 9 } };
+  const draft = { version: 1, convert: { enabled: false, targetTokenId: USDC, minUsdCents: 7500 }, sweep: { ...POLICY.sweep, enabled: false }, reminders: { billDueDays: 5, invoiceOverdueDays: 9 } };
   await page.route("**/api/agent/ai-status", (r) => r.fulfill({ json: { configured: true } }));
   await page.route("**/api/agent/summary", (r) => r.fulfill({ json: { text: "Summary.", at: "t" } }));
   await page.route("**/api/agent/policy/draft", (r) => r.fulfill({ json: { policy: draft, notes: "Draft notes." } }));
@@ -278,5 +278,43 @@ test("Discard draft resets the Rules form to the saved policy", async ({ page })
   await page.getByRole("button", { name: "Discard draft" }).click();
   await expect(page.locator("#ag-convert-min")).toHaveValue("10.00");
   await expect(page.locator("#ag-sign-step")).toHaveCount(0);
+  expect(calls.some((c) => c.method === "PUT")).toBe(false);
+});
+
+const LIMITED = { ...POLICY, limits: { perTx: { [USDC]: "50000000" }, daily: { [USDC]: "200000000" }, whitelistOnly: true } };
+async function withDraft(page: Page, draft: unknown) {
+  const calls = await setup(page, LIMITED);
+  await page.route("**/api/agent/ai-status", (r) => r.fulfill({ json: { configured: true } }));
+  await page.route("**/api/agent/summary", (r) => r.fulfill({ json: { text: "Summary.", at: "t" } }));
+  await page.route("**/api/agent/policy/draft", (r) => r.fulfill({ json: { policy: draft, notes: "Draft notes." } }));
+  await page.goto("/#/agent");
+  await expect(page.locator(`.ag-cap-tx[data-token="${USDC}"]`)).toHaveValue("50");
+  await page.locator("#ag-ai-text").fill("convert over 75 dollars");
+  await page.getByRole("button", { name: "Draft rules" }).click();
+  await expect(page.locator("#ag-ai-draft")).toContainText("Draft notes.");
+  return calls;
+}
+
+test("AI draft with only convert keeps the saved limits, sweep and reminders; the sign step lists the change", async ({ page }) => {
+  const calls = await withDraft(page, { version: 1, convert: { enabled: true, targetTokenId: USDC, minUsdCents: 7500 } });
+  await expect(page.locator("#ag-convert-min")).toHaveValue("75.00");
+  await expect(page.locator(`.ag-cap-tx[data-token="${USDC}"]`)).toHaveValue("50");
+  await expect(page.locator(`.ag-cap-day[data-token="${USDC}"]`)).toHaveValue("200");
+  await expect(page.locator("#ag-wl-only")).toBeChecked();
+  await expect(page.locator("#ag-sweep-on")).toBeChecked();
+  await expect(page.locator("#ag-bill-days")).toHaveValue("3");
+  await page.getByRole("button", { name: "Save rules" }).click();
+  await expect(page.locator("#ag-sign-changes")).toHaveText("This draft changes: convert");
+  await expect(page.locator("#ag-sign-loosened")).toHaveCount(0);
+  expect(calls.find((c) => c.path === "/api/agent/policy/challenge")!.body).toEqual({ kind: "policy", policy: { ...LIMITED, convert: { enabled: true, targetTokenId: USDC, minUsdCents: 7500 } } });
+});
+
+test("AI draft that removes a spending cap is flagged before signing", async ({ page }) => {
+  const calls = await withDraft(page, { version: 1, limits: { perTx: {}, daily: { [USDC]: "200000000" }, whitelistOnly: true } });
+  await expect(page.locator(`.ag-cap-tx[data-token="${USDC}"]`)).toHaveValue("");
+  await page.getByRole("button", { name: "Save rules" }).click();
+  await expect(page.locator("#ag-sign-changes")).toHaveText("This draft changes: limits");
+  await expect(page.locator("#ag-sign-loosened")).toHaveText("⚠ Loosens your spending limits");
+  await expect(page.locator("#ag-sign-message")).toHaveText(MESSAGE);
   expect(calls.some((c) => c.method === "PUT")).toBe(false);
 });
