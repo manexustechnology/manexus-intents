@@ -64,6 +64,24 @@ export async function listActivity(deps: Deps, user: User, limit = 50): Promise<
   return items.sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0)).slice(0, n);
 }
 
+/**
+ * What a transfer actually took from the balance: `amount` (for EXACT_OUTPUT the quote's amountIn, which
+ * includes the slippage buffer) less the `refundedAmount` 1Click reported, never below 0. Without a reported
+ * refund the whole amount counts, buffer included.
+ */
+function netSent(amount: string, upstream: string | null): string {
+  if (!/^\d+$/.test(amount)) return amount;
+  let refunded: unknown;
+  try {
+    refunded = (JSON.parse(upstream ?? "null") as { refundedAmount?: unknown } | null)?.refundedAmount;
+  } catch {
+    return amount;
+  }
+  if (typeof refunded !== "string" || !/^\d+$/.test(refunded)) return amount;
+  const net = BigInt(amount) - BigInt(refunded);
+  return (net > 0n ? net : 0n).toString();
+}
+
 /** Received vs sent per settlement token in the current UTC month. Sums are bigint; tokens are never mixed. */
 export async function monthSummary(deps: Deps, user: User): Promise<MonthSummary> {
   const y = deps.now.getUTCFullYear();
@@ -85,10 +103,10 @@ export async function monthSummary(deps: Deps, user: User): Promise<MonthSummary
   for (const r of a.results) add(recv, r.token, r.amount);
   // A swap stays in the owner's own Intents account: an internal move, not money sent.
   const s = await deps.db
-    .prepare(`SELECT origin_asset AS token, amount FROM withdrawals WHERE owner = ? AND status = 'SUCCESS' AND kind != 'swap' AND updated_at >= ? AND updated_at < ?`)
+    .prepare(`SELECT origin_asset AS token, amount, upstream FROM withdrawals WHERE owner = ? AND status = 'SUCCESS' AND kind != 'swap' AND updated_at >= ? AND updated_at < ?`)
     .bind(user.account, from, to)
-    .all<{ token: string; amount: string }>();
-  for (const r of s.results) add(sent, r.token, r.amount);
+    .all<{ token: string; amount: string; upstream: string | null }>();
+  for (const r of s.results) add(sent, r.token, netSent(r.amount, r.upstream));
   return {
     month: from.slice(0, 7),
     tokens: SETTLEMENT_TOKENS.map((t) => {

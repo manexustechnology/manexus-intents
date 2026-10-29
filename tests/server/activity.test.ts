@@ -95,3 +95,18 @@ test("GET /api/activity requires a session and serves feed and summary", async (
   const sum = (await (await onRequestGet({ request: new Request("https://x/api/activity?summary=month", h), env, params: {} } as never)).json()) as { tokens: unknown[] };
   assert.equal(sum.tokens.length, 2);
 });
+
+test("month summary: sent subtracts the unused slippage buffer 1Click reports as refunded, never below 0", async () => {
+  const db = createTestDb();
+  const set = (dep: string, u: unknown) => run(db, "UPDATE withdrawals SET upstream = ? WHERE deposit_address = ?", typeof u === "string" ? u : JSON.stringify(u), dep);
+  await transfer(db, "b1", "alice.near", "bill", "SUCCESS", USDC, "1010000", "2030-03-05T00:00:00.000Z");
+  await set("b1", { status: "SUCCESS", refundedAmount: "9000" });
+  await transfer(db, "p1", "alice.near", "payroll", "SUCCESS", USDC, "1010000", "2030-03-05T00:00:00.000Z");
+  await set("p1", { status: "SUCCESS", refundedAmount: "5000000" }); // more than sent: clamps to 0
+  await transfer(db, "p2", "alice.near", "payroll", "SUCCESS", USDC, "1010000", "2030-03-05T00:00:00.000Z");
+  await set("p2", { status: "SUCCESS", refundedAmount: "-5" }); // not base units: ignored
+  await transfer(db, "p3", "alice.near", "payroll", "SUCCESS", USDC, "1010000", "2030-03-05T00:00:00.000Z");
+  await set("p3", "not json");
+  const usdc = (await monthSummary({ db, now: NOW }, ALICE)).tokens.find((t) => t.symbol === "USDC")!;
+  assert.equal(usdc.sent, (1010000n - 9000n + 0n + 1010000n + 1010000n).toString());
+});

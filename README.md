@@ -28,7 +28,7 @@ Every outbound transfer (withdraw, swap, bill, payroll line) goes through one en
 - **Cash**: every token in the Intents balance with a USD total at reference prices.
 - **Receivables**: issued, unpaid invoices per token, with the overdue count.
 - **Payables**: scheduled bills due in the next 14 days per token, with the overdue count.
-- **This month**: received (verified invoice payments) and sent (successful withdrawals, bill payments and payroll lines; a swap stays in your account and is not counted) per settlement token (USDC, USDT), summed in integer base units and never mixed across tokens.
+- **This month**: received (verified invoice payments) and sent (successful withdrawals, bill payments and payroll lines; a swap stays in your account and is not counted). For bills and payroll, sent is what left the balance: the quote's amount in, less any unused slippage buffer 1Click reports as refunded; when 1Click reports no refund amount the figure includes the buffer per settlement token (USDC, USDT), summed in integer base units and never mixed across tokens.
 - **Activity**: invoice payments (including extra payments), withdrawals, swaps, bill payments and payroll lines, newest first, each linking to its invoice, bill or payout. Unsigned quotes moved no funds and are not listed.
 
 Each tile loads on its own; one failing request does not blank the others.
