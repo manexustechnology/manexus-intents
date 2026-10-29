@@ -27,6 +27,7 @@ test("home shows balances, reference usd, receivables and actions", async ({ pag
   await expect(page.locator("#home-cards")).toContainText("2.5 USDC");
   await expect(page.locator("#home-recv")).toContainText("3.5 USDC");
   await expect(page.locator("#home-recv")).toContainText("2 unpaid invoices · 1 overdue");
+  await expect(page.locator("#home-recv")).toContainText("Payment status updates when you open an invoice.");
   await expect(page.locator("#home-recent")).toContainText("A-3");
   await expect(page.locator("#home-recent b")).toHaveCount(0);
   await expect(page.getByRole("link", { name: "Withdraw" }).first()).toHaveAttribute("href", "#/withdraw");

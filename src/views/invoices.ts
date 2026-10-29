@@ -36,6 +36,7 @@ export function mountInvoices(el: HTMLElement): () => void {
   let items: InvoiceRow[] = [];
   el.innerHTML = `<div class="heading"><div><p class="eyebrow">GET PAID IN STABLECOINS</p><h1>Invoices</h1><p class="muted">Payments settle straight into your own NEAR Intents account.</p></div><a class="primary" href="#/invoices/new">+ New invoice</a></div>
 <div class="invoice-toolbar"><label>Filter<select id="invoice-filter" aria-label="Filter by status">${FILTERS.map((f) => `<option value="${f}">${f === "all" ? "All" : STATUS_LABEL[f]}</option>`).join("")}</select></label></div>
+<p class="fine">Payment status updates when you open an invoice.</p>
 <p class="error" id="invoice-error" role="alert"></p>
 <section class="panel invoice-list" id="invoice-rows"><p class="muted" role="status">Loading…</p></section>`;
   const rows = el.querySelector<HTMLElement>("#invoice-rows")!;

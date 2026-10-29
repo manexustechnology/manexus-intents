@@ -119,3 +119,9 @@ test("owner sees a mismatched payment as Needs review with the received amount",
   await expect(row).toContainText("Received 0.699999 USDC");
   await expect(page.locator(".heading .badge.status-issued")).toBeVisible();
 });
+
+test("the invoice list says payment status updates when an invoice is opened", async ({ page }) => {
+  await mockApi(page);
+  await page.goto("/#/invoices");
+  await expect(page.getByText("Payment status updates when you open an invoice.")).toBeVisible();
+});

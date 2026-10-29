@@ -66,7 +66,7 @@ export function mountHome(el: HTMLElement): () => void {
       if (!alive) return;
       const r = receivables(items);
       q("#home-recv").innerHTML = r.count
-        ? `<p class="home-total">${r.totals.map(esc).join(" + ") || "—"}</p><p class="muted">${r.count} unpaid ${r.count === 1 ? "invoice" : "invoices"} · ${r.overdue} overdue</p>`
+        ? `<p class="home-total">${r.totals.map(esc).join(" + ") || "—"}</p><p class="muted">${r.count} unpaid ${r.count === 1 ? "invoice" : "invoices"} · ${r.overdue} overdue</p><p class="fine">Payment status updates when you open an invoice.</p>`
         : `<p class="muted">Nothing outstanding.</p>`;
       const recent = items.slice(0, 5);
       q("#home-recent").innerHTML = recent.length

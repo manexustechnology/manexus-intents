@@ -20,7 +20,7 @@ Browser SPA (Vite, TypeScript, hash routes)
 Cloudflare Pages Functions  /api/*   (functions/, server/)
    |-- 1Click API  (quotes, status, submit signed intent)   ONECLICK_BASE_URL, optional ONECLICK_API_KEY
    |-- NEAR RPC    (read intents.near balances, key checks)  NEAR_RPC_URL
-   '-- D1 (SQLite) (sessions, invoices, payment attempts, withdrawals)
+   '-- D1 (SQLite) (sign-in challenges, invoices, payment attempts, withdrawals; sessions are stateless signed cookies)
 ```
 
 The browser talks only to `/api`; the wallet SDKs (Meteor, HOT, injected EVM) make their own wallet and RPC calls, which the CSP in `public/_headers` allows. Signing happens in the user's wallet; the server only verifies, quotes and relays.
