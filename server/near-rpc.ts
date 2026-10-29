@@ -1,3 +1,5 @@
+import type { Env } from "./env.ts";
+
 export type NearRpc = {
   viewAccessKey(account: string, publicKey: string): Promise<{ permission: unknown } | null>;
   viewFunction<T>(contract: string, method: string, args: object): Promise<T>;
@@ -46,3 +48,6 @@ export function createNearRpc(url: string, fetchFn: typeof fetch): NearRpc {
     },
   };
 }
+
+/** The NEAR RPC client for a request's env. Every route builds its client here. */
+export const nearRpcFor = (env: Env): NearRpc => createNearRpc(env.NEAR_RPC_URL, (input, init) => fetch(input, init));

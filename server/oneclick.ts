@@ -1,3 +1,4 @@
+import type { Env } from "./env.ts";
 import { HttpError } from "./http.ts";
 
 export type OneClickToken = {
@@ -72,13 +73,15 @@ const hashes = (v: unknown): string[] => {
 };
 
 export function createOneClick(opts: { baseUrl: string; apiKey?: string; fetch: typeof fetch }) {
+  // Called bare: workerd's fetch throws "Illegal invocation" when called as a method of another object.
+  const doFetch = opts.fetch;
   async function call(path: string, init: { method?: string; body?: unknown } = {}): Promise<unknown> {
     const headers: Record<string, string> = { accept: "application/json" };
     if (init.body !== undefined) headers["content-type"] = "application/json";
     if (opts.apiKey) headers["X-API-Key"] = opts.apiKey;
     let res: Response;
     try {
-      res = await opts.fetch(opts.baseUrl.replace(/\/$/, "") + path, {
+      res = await doFetch(opts.baseUrl.replace(/\/$/, "") + path, {
         method: init.method ?? "GET",
         headers,
         body: init.body === undefined ? undefined : JSON.stringify(init.body),
@@ -181,3 +184,7 @@ export function createOneClick(opts: { baseUrl: string; apiKey?: string; fetch: 
     },
   };
 }
+
+/** The 1Click client for a request's env. Every route builds its client here. */
+export const oneClickFor = (env: Env) =>
+  createOneClick({ baseUrl: env.ONECLICK_BASE_URL, apiKey: env.ONECLICK_API_KEY, fetch: (input, init) => fetch(input, init) });

@@ -72,3 +72,13 @@ test("intent endpoints", async () => {
   await createOneClick({ baseUrl: "https://x", fetch: h.f }).submitDeposit("tx", "d");
   assert.deepEqual(JSON.parse(h.calls[0].init.body as string), { txHash: "tx", depositAddress: "d" });
 });
+
+test("injected fetch is called bare, never as a method (workerd throws Illegal invocation)", async () => {
+  const body = JSON.stringify([{ assetId: "a", symbol: "A", blockchain: "near", decimals: 6 }]);
+  const strict = function (this: unknown) {
+    if (this !== undefined && this !== globalThis) throw new TypeError("Illegal invocation");
+    return Promise.resolve(new Response(body));
+  } as unknown as typeof fetch;
+  const tokens = await createOneClick({ baseUrl: "https://x", fetch: strict }).tokens();
+  assert.equal(tokens[0].assetId, "a");
+});
