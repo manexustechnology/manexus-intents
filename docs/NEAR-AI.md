@@ -24,6 +24,12 @@ Re-run `node scripts/spike-nearai.ts` to refresh (Node >= 22.18 runs .ts directl
 ## Default model rationale
 `openai/gpt-6-luna`: `is_ready: true`, advertises both `json_mode` and `structured_outputs`, 1.05M context, cheap (USD 0.10 in / 0.50 out per 1M tokens). Alternatives, also ready with `json_mode`: `deepseek/deepseek-v4.1-flash` (0.30/1.20), `Qwen/Qwen3.6-35B-A3B-FP8` (0.17/1.10). Many models (all `openai/gpt-5*`, gemini) show `is_ready: false`, so they were avoided. The model is chosen from the list but not yet exercised with a real completion; it is a reasoning model, so give `max_tokens` headroom.
 
+## Token budgets (server/nearai.ts)
+Because the default model reasons before answering and its reasoning tokens count against `max_tokens`, the app keeps headroom instead of a tight cap: rule drafting sends `max_tokens: 1500` (a JSON object plus two sentences), the summary sends `SUMMARY_MAX_TOKENS = 1000` (the reply is cut to 600 characters anyway). With a non-reasoning model about 300 would do for the summary.
+
+## Rate limit
+`POST /api/agent/policy/draft` allows 5 AI calls per owner per one-minute window (counter in `agent_cache`, migration `0008_ai_rate.sql`); the 6th returns 429 "Too many AI requests — try again in a minute". Invalid input is rejected before it counts. The summary is cached 10 minutes per owner (manual refresh at most once a minute).
+
 ## Step 2 status: PENDING
 `NEAR_AI_API_KEY` is empty, so no chat completion was sent. Still to measure with a key: whether `response_format: {type:"json_object"}` returns 400 or is ignored, real latency, the 401 body. Run the script with a key set; it probes plain and `json_object` requests.
 

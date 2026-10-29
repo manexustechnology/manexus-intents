@@ -28,6 +28,16 @@ const MAX_SUMMARY = 600;
 export const SUMMARY_TTL_MS = 10 * 60_000;
 /** A manual refresh may bypass the cache only once the cached summary is at least this old. */
 export const REFRESH_MIN_MS = 60_000;
+/** Rule drafting: at most DRAFT_LIMIT AI calls per owner per DRAFT_WINDOW_MS. */
+export const DRAFT_LIMIT = 5;
+export const DRAFT_WINDOW_MS = 60_000;
+export const RATE_LIMITED = "Too many AI requests — try again in a minute";
+/**
+ * Completion budget for the summary. The default model (`openai/gpt-6-luna`, docs/NEAR-AI.md) is a reasoning
+ * model whose hidden reasoning tokens count against `max_tokens`; 1000 leaves headroom for that plus a reply
+ * that is cut to 600 characters anyway. A non-reasoning model would need only about 300.
+ */
+export const SUMMARY_MAX_TOKENS = 1000;
 
 export type NearAi = { configured: boolean; chat(messages: ChatMessage[], maxTokens: number): Promise<string> };
 
@@ -137,6 +147,27 @@ export function validateDraftText(text: unknown): string {
   return text.trim();
 }
 
+/**
+ * Counts one drafting call for the owner in a single upsert (one D1 query) and throws 429 once more than
+ * DRAFT_LIMIT calls fall in the current window. The window opens at the first call after the previous one
+ * ended (a fixed window per owner, so at most 2 x DRAFT_LIMIT calls can land in any 60 s span across a boundary).
+ */
+export async function checkDraftRate(db: Db, user: User, now: Date): Promise<void> {
+  const at = now.toISOString();
+  const cutoff = new Date(now.getTime() - DRAFT_WINDOW_MS).toISOString();
+  const row = await db
+    .prepare(
+      `INSERT INTO agent_cache (owner, draft_window_start, draft_count) VALUES (?, ?, 1)
+       ON CONFLICT(owner) DO UPDATE SET
+         draft_count = CASE WHEN agent_cache.draft_window_start IS NULL OR agent_cache.draft_window_start <= ? OR agent_cache.draft_window_start > ? THEN 1 ELSE agent_cache.draft_count + 1 END,
+         draft_window_start = CASE WHEN agent_cache.draft_window_start IS NULL OR agent_cache.draft_window_start <= ? OR agent_cache.draft_window_start > ? THEN excluded.draft_window_start ELSE agent_cache.draft_window_start END
+       RETURNING draft_count`,
+    )
+    .bind(user.account, at, cutoff, at, cutoff, at)
+    .first<{ draft_count: number }>();
+  if (!row || row.draft_count > DRAFT_LIMIT) throw new HttpError(429, RATE_LIMITED);
+}
+
 export async function draftPolicy(ai: NearAi, _user: User, text: string, ctx: DraftCtx): Promise<{ policy: Policy; notes?: string }> {
   requireConfigured(ai);
   const reply = await ai.chat([{ role: "system", content: draftSystemPrompt(ctx) }, { role: "user", content: validateDraftText(text) }], 1500);
@@ -219,7 +250,7 @@ export async function summarize(ai: NearAi, facts: SummaryFacts): Promise<{ text
       { role: "system", content: "You write a short plain-text summary (2 to 4 sentences, no markdown, no lists) of a business treasury from the JSON facts the user sends: balances, money owed to the business (receivables), bills the business owes (payables), open agent suggestions by type, and this month's totals. Use only the facts given and never invent numbers. Do not give instructions or advice about moving funds." },
       { role: "user", content: JSON.stringify(facts) },
     ],
-    1500,
+    SUMMARY_MAX_TOKENS,
   );
   return { text: reply.trim().slice(0, MAX_SUMMARY) };
 }

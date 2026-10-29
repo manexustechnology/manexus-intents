@@ -249,3 +249,34 @@ test("AI 503 (402/429/timeout) shows a message and the rest of the Agent page ke
   await page.locator('.ag-dismiss[data-proposal="p2"]').click();
   await expect(page.locator("#ag-inbox .agent-reason")).toHaveCount(3);
 });
+
+test("Discard draft resets the Rules form to the saved policy", async ({ page }) => {
+  const calls = await setup(page);
+  const draft = { version: 1, convert: { enabled: false, targetTokenId: USDC, minUsdCents: 7500 }, reminders: { billDueDays: 5, invoiceOverdueDays: 9 } };
+  await page.route("**/api/agent/ai-status", (r) => r.fulfill({ json: { configured: true } }));
+  await page.route("**/api/agent/summary", (r) => r.fulfill({ json: { text: "Summary.", at: "t" } }));
+  await page.route("**/api/agent/policy/draft", (r) => r.fulfill({ json: { policy: draft, notes: "Draft notes." } }));
+  await page.goto("/#/agent");
+  await expect(page.locator("#ag-convert-min")).toHaveValue("10.00");
+  await expect(page.getByRole("button", { name: "Discard draft" })).toBeHidden();
+  await page.locator("#ag-ai-text").fill("convert over 75 dollars");
+  await page.getByRole("button", { name: "Draft rules" }).click();
+  await expect(page.locator("#ag-convert-min")).toHaveValue("75.00");
+  await expect(page.locator("#ag-sweep-on")).not.toBeChecked();
+  await page.getByRole("button", { name: "Discard draft" }).click();
+  await expect(page.locator("#ag-convert-min")).toHaveValue("10.00");
+  await expect(page.locator("#ag-bill-days")).toHaveValue("3");
+  await expect(page.locator("#ag-sweep-on")).toBeChecked();
+  await expect(page.locator("#ag-sweep-threshold")).toHaveValue("600");
+  await expect(page.locator("#ag-ai-draft")).not.toContainText("Draft notes.");
+  await expect(page.locator("#ag-rules-note")).toHaveText("Draft discarded. These are your saved rules.");
+  await expect(page.getByRole("button", { name: "Discard draft" })).toBeHidden();
+  // Unsaved manual edits can be discarded too, including an open signing step.
+  await page.locator("#ag-convert-min").fill("33");
+  await page.getByRole("button", { name: "Save rules" }).click();
+  await expect(page.locator("#ag-sign-message")).toHaveText(MESSAGE);
+  await page.getByRole("button", { name: "Discard draft" }).click();
+  await expect(page.locator("#ag-convert-min")).toHaveValue("10.00");
+  await expect(page.locator("#ag-sign-step")).toHaveCount(0);
+  expect(calls.some((c) => c.method === "PUT")).toBe(false);
+});

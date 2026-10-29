@@ -568,8 +568,24 @@ ${t.refreshError ? `<p class="error" role="alert">${esc(t.refreshError)}</p>` : 
 <div class="table-scroll"><table class="ag-caps"><thead><tr><th scope="col">Token</th><th scope="col">Per transaction</th><th scope="col">Per 24 hours</th></tr></thead><tbody>${capRows}</tbody></table></div>
 <label class="radio"><input type="checkbox" id="ag-wl-only" ${l?.whitelistOnly ? "checked" : ""}> Whitelisted recipients only (withdrawals, manual bills, payroll)</label></fieldset>
 <p class="error" id="ag-rules-error" role="alert">${esc(rulesError)}</p><p class="fine" id="ag-rules-note" role="status">${esc(rulesNote)}</p>
-<button class="primary" type="submit">Save rules</button></form>`;
-    q<HTMLFormElement>("#ag-rules-form")!.onsubmit = (e) => {
+<div class="invoice-actions"><button class="textbutton" type="button" id="ag-rules-discard" ${draft ? "" : "hidden"}>Discard draft</button><button class="primary" type="submit">Save rules</button></div></form>`;
+    const form = q<HTMLFormElement>("#ag-rules-form")!;
+    const discard = q<HTMLButtonElement>("#ag-rules-discard")!;
+    // Any unsaved edit (or a loaded AI draft) can be thrown away; the form then shows the saved policy again.
+    form.oninput = form.onchange = () => (discard.hidden = false);
+    discard.onclick = () => {
+      draft = null;
+      draftState.notes = "";
+      rulesError = "";
+      rulesNote = "Draft discarded. These are your saved rules.";
+      if (signStep?.where === "rules") {
+        signStep = null;
+        drawSign();
+      }
+      drawAiDraft();
+      drawRules();
+    };
+    form.onsubmit = (e) => {
       e.preventDefault();
       let next: Policy;
       try {
