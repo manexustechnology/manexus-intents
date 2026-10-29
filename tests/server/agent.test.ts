@@ -65,9 +65,9 @@ test("pay_bill: due within billDueDays or overdue; later, paid and cancelled are
   const policy = P({ reminders: { billDueDays: 3, invoiceOverdueDays: 7 } });
   const bills = [bill("a", "2030-01-13"), bill("b", "2030-01-14"), bill("c", "2029-12-01"), bill("d", "2030-01-10", "paid"), bill("e", "bad")];
   const out = evaluate(input({ policy, bills }));
-  assert.deepEqual(out.map((d) => d.dedupKey), ["bill:a", "bill:c"]);
-  assert.equal(out[0].expiresAt, "2030-01-14T00:00:00.000Z");
-  assert.equal(out[1].expiresAt, "2030-01-10T13:00:00.000Z"); // long overdue: not created already expired
+  assert.deepEqual(out.map((d) => d.dedupKey), ["bill:c", "bill:a"]); // oldest due first
+  assert.equal(out[1].expiresAt, "2030-01-14T00:00:00.000Z");
+  assert.equal(out[0].expiresAt, "2030-01-10T13:00:00.000Z"); // long overdue: not created already expired
 });
 
 test("follow_up_invoice: overdue by at least invoiceOverdueDays (UTC), expires in 7 days", () => {
@@ -211,6 +211,65 @@ test("query budget: 50 bills, 100 invoices, 20 balances", async () => {
   assert.ok((db as TestDb).queries <= 45);
   (db as TestDb).queries = 0;
   await runAgent(deps(at(120_000)), ALICE);
+  assert.ok((db as TestDb).queries <= 45);
+});
+
+const insInv = (db: Db, id: string, due: string) =>
+  db.prepare("INSERT INTO invoices (id, public_id, owner, status, token_id, data, total, revision, created_at, updated_at) VALUES (?, ?, ?, 'issued', ?, ?, '1', 1, 't', 't')").bind(id, `p${id}`, ALICE.account, USDC, JSON.stringify({ number: "1", client: "C", issuer: "I", dueDate: due, tokenId: USDC, notes: "", items: [] })).run();
+const day = (k: number) => new Date(Date.UTC(2029, 0, 1) + k * 86_400_000).toISOString().slice(0, 10);
+
+test("cap: 250 overdue invoices give at most 200 drafts, oldest due first; paid ones expire and the next refresh", async () => {
+  const { db, deps } = setup();
+  await setPolicy(db, ALICE.account, P({ reminders: { billDueDays: 3, invoiceOverdueDays: 7 } }));
+  for (let i = 0; i < 250; i++) await insInv(db, `i${String(i).padStart(3, "0")}`, day(i)); // i000 is the oldest
+  const first = await runAgent(deps(), ALICE);
+  assert.equal(first.length, 200);
+  assert.deepEqual(first.map((p) => p.params.invoiceId).sort(), Array.from({ length: 200 }, (_, i) => `i${String(i).padStart(3, "0")}`));
+  await db.prepare("UPDATE invoices SET status = 'paid' WHERE id < 'i050'").bind().run();
+  const next = await runAgent(deps(at(120_000)), ALICE);
+  assert.equal(next.length, 200);
+  assert.deepEqual(next.map((p) => p.params.invoiceId).sort(), Array.from({ length: 200 }, (_, i) => `i${String(i + 50).padStart(3, "0")}`));
+  const n = (st: string) => db.prepare("SELECT COUNT(*) AS n FROM agent_proposals WHERE status = ?").bind(st).first<{ n: number }>().then((r) => r!.n);
+  assert.equal(await n("expired"), 50);
+  assert.equal(await n("proposed"), 200);
+});
+
+test("dismissal: only the latest dismissed row per key blocks (X, Y, X again is proposed)", async () => {
+  const { db, w, deps } = setup({ balances: { [USDT]: "50000000" } });
+  await setPolicy(db, ALICE.account, P({ convert: { enabled: true, targetTokenId: USDC, minUsdCents: 100 } }));
+  const dismissOne = async (ms: number) => { const [p] = await listProposals(db, ALICE); await dismissProposal(db, ALICE, p.id, at(ms)); };
+  await runAgent(deps(), ALICE); await dismissOne(1_000);              // X dismissed
+  w.balances[USDT] = "60000000";
+  await runAgent(deps(at(100_000)), ALICE); await dismissOne(101_000); // Y dismissed
+  w.balances[USDT] = "50000000";
+  const back = await runAgent(deps(at(200_000)), ALICE);                // X again: latest dismissal is Y
+  assert.equal(back.length, 1);
+  assert.equal(back[0].params.amount, "50000000");
+  await dismissOne(201_000);                                           // X dismissed latest
+  assert.deepEqual(await runAgent(deps(at(300_000)), ALICE), []);
+});
+
+test("force: a forced run within 5 s of the last write is ignored; after 5 s it evaluates", async () => {
+  const { db, w, deps } = setup({ balances: { [USDT]: "50000000" } });
+  await setPolicy(db, ALICE.account, P({ convert: { enabled: true, targetTokenId: USDC, minUsdCents: 100 } }));
+  await runAgent(deps(), ALICE);
+  w.fail = true;
+  assert.equal((await runAgent(deps(at(4_000)), ALICE, { force: true })).length, 1);
+  await assert.rejects(runAgent(deps(at(5_000)), ALICE, { force: true }), { status: 502 });
+});
+
+test("query budget: worst-case first run (200 bills, 200 invoices, 20 balances) stays within 45", async () => {
+  const { db, w, deps } = setup();
+  for (let i = 0; i < 20; i++) {
+    w.balances[`nep141:t${i}.near`] = "50000000";
+    await db.prepare("INSERT INTO withdrawals (deposit_address, owner, origin_asset, destination_asset, amount, recipient, status, created_at, updated_at) VALUES (?, ?, ?, ?, '1', 'x', 'SUCCESS', 't', 't')").bind(`d${i}`, ALICE.account, `nep141:t${i}.near`, USDC).run();
+  }
+  for (let i = 0; i < 200; i++) { await insBill(db, `b${i}`, ALICE.account, day(i)); await insInv(db, `i${i}`, day(i)); }
+  await setPolicy(db, ALICE.account, P({ convert: { enabled: true, targetTokenId: USDC, minUsdCents: 100 }, reminders: { billDueDays: 3, invoiceOverdueDays: 7 } }));
+  (db as TestDb).queries = 0;
+  const out = await runAgent(deps(), ALICE);
+  console.log(`runAgent worst case first run: ${(db as TestDb).queries} queries, ${out.length} proposals`);
+  assert.equal(out.length, 200);
   assert.ok((db as TestDb).queries <= 45);
 });
 

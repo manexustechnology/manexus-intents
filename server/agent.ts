@@ -29,6 +29,12 @@ export type EvalInput = { now: Date; policy: Policy; balances: Balance[]; bills:
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
 export const THROTTLE_MS = 60_000;
+/** A forced run still waits this long after the owner's newest proposal write. */
+export const FORCE_MIN_MS = 5_000;
+/** Hard cap on drafts per evaluation, so open proposals stay well under the load limit below. */
+export const MAX_DRAFTS = 200;
+const MAX_OPEN = 1000;
+const WRITE_CHUNK = 100;
 const ID = /^[A-Za-z0-9_-]{1,100}$/;
 
 /** "12.34" -> 1234n. Anything that is not a plain two-decimal-or-fewer dollar string is not comparable (undefined). */
@@ -43,6 +49,7 @@ const dayMs = (d: string) => (/^\d{4}-\d{2}-\d{2}$/.test(d) ? Date.parse(`${d}T0
 export function evaluate(input: EvalInput): ProposalDraft[] {
   const { now, policy, balances, bills, invoices, whitelist } = input;
   const out: ProposalDraft[] = [];
+  const bill: ProposalDraft[] = [], follow: ProposalDraft[] = [];
   const hourLater = new Date(now.getTime() + HOUR).toISOString();
   const today = dayMs(now.toISOString().slice(0, 10));
 
@@ -67,6 +74,7 @@ export function evaluate(input: EvalInput): ProposalDraft[] {
     }
   }
 
+  const dues = new Map<string, number>();
   const r = policy.reminders;
   if (r) {
     for (const b of bills) {
@@ -74,15 +82,20 @@ export function evaluate(input: EvalInput): ProposalDraft[] {
       if (b.status !== "scheduled" || Number.isNaN(due) || due > today + r.billDueDays * DAY) continue;
       // A long-overdue bill would otherwise be created already expired and re-created on every run.
       const expires = Math.max(due + DAY, now.getTime() + HOUR);
-      out.push({ type: "pay_bill", dedupKey: `bill:${b.id}`, params: { billId: b.id }, expiresAt: new Date(expires).toISOString() });
+      bill.push({ type: "pay_bill", dedupKey: `bill:${b.id}`, params: { billId: b.id }, expiresAt: new Date(expires).toISOString() });
+      dues.set(`bill:${b.id}`, due);
     }
     for (const i of invoices) {
       const due = dayMs(i.data.dueDate);
       if (i.status !== "issued" || Number.isNaN(due) || today - due < Math.max(r.invoiceOverdueDays, 1) * DAY) continue;
-      out.push({ type: "follow_up_invoice", dedupKey: `invoice:${i.id}`, params: { invoiceId: i.id, publicId: i.publicId }, expiresAt: new Date(now.getTime() + 7 * DAY).toISOString() });
+      dues.set(`invoice:${i.id}`, due);
+      follow.push({ type: "follow_up_invoice", dedupKey: `invoice:${i.id}`, params: { invoiceId: i.id, publicId: i.publicId }, expiresAt: new Date(now.getTime() + 7 * DAY).toISOString() });
     }
   }
-  return out;
+  // Priority when capped: sweep, convert, then bills and follow-ups by due date (oldest first, key as tiebreak).
+  const byDue = (a: ProposalDraft, b: ProposalDraft) => dues.get(a.dedupKey)! - dues.get(b.dedupKey)! || (a.dedupKey < b.dedupKey ? -1 : 1);
+  const sweepFirst = [...out.filter((d) => d.type === "sweep"), ...out.filter((d) => d.type === "convert")];
+  return [...sweepFirst, ...bill.sort(byDue), ...follow.sort(byDue)].slice(0, MAX_DRAFTS);
 }
 
 type Raw = { id: string; type: ProposalType; dedup_key: string; params: string; status: ProposalStatus; deposit_address: string | null; created_at: string; updated_at: string; expires_at: string };
@@ -100,7 +113,7 @@ const sameParams = (a: Record<string, string>, b: Record<string, string>) => {
 
 async function openProposals(db: Db, owner: string): Promise<Raw[]> {
   const { results } = await db
-    .prepare(`SELECT ${COLS} FROM agent_proposals WHERE owner = ? AND status IN ('proposed','executing') ORDER BY created_at, id LIMIT 200`)
+    .prepare(`SELECT ${COLS} FROM agent_proposals WHERE owner = ? AND status IN ('proposed','executing') ORDER BY created_at, id LIMIT ${MAX_OPEN}`)
     .bind(owner)
     .all<Raw>();
   return results;
@@ -117,17 +130,18 @@ export type AgentDeps = { db: Db; rpc: NearRpc; oneclick: { tokens(): Promise<On
  * Evaluate the owner's rules and store the result: new drafts become `proposed`; open `proposed` rows whose
  * basis changed (key no longer produced, different params, or past `expires_at`) are expired. `executing` rows
  * are never touched here. A draft the owner dismissed with identical params is not proposed again. One batch
- * writes everything; at most 13 queries. A balances failure is 502 and nothing is written.
+ * writes everything; at most 12 queries (11 for 50 bills / 100 invoices / 20 balances), the write batch chunked at 100 statements. A balances failure is 502 and nothing is written.
  */
 export async function runAgent(deps: AgentDeps, user: User, opts: { force?: boolean } = {}): Promise<Proposal[]> {
   const { db, now } = deps;
   const owner = user.account;
   const { policy } = await getPolicy(db, user);
   if (!policy) return [];
-  if (!opts.force) {
+  {
+    // 60 s throttle; `force` still enforces a hard 5 s minimum between runs per owner.
     const last = await db.prepare("SELECT MAX(updated_at) AS t FROM agent_proposals WHERE owner = ?").bind(owner).first<{ t: string | null }>();
     const t = last?.t ? Date.parse(last.t) : NaN;
-    if (!Number.isNaN(t) && now.getTime() - t < THROTTLE_MS && now.getTime() >= t) return listProposals(db, user);
+    if (!Number.isNaN(t) && now.getTime() - t < (opts.force ? FORCE_MIN_MS : THROTTLE_MS) && now.getTime() >= t) return listProposals(db, user);
   }
   const balances = await getBalances({ db, rpc: deps.rpc, oneclick: deps.oneclick }, owner);
   const whitelist = await listWhitelist(db, user);
@@ -138,7 +152,11 @@ export async function runAgent(deps: AgentDeps, user: User, opts: { force?: bool
 
   const open = await openProposals(db, owner);
   const { results: dismissed } = await db
-    .prepare("SELECT dedup_key, params FROM agent_proposals WHERE owner = ? AND status = 'dismissed' ORDER BY updated_at DESC LIMIT 200")
+    // Only the LATEST dismissal per key blocks: X -> dismissed, Y -> dismissed, X again is proposed (latest is Y).
+    .prepare(
+      `SELECT dedup_key, params FROM agent_proposals a WHERE owner = ? AND status = 'dismissed' AND updated_at =
+       (SELECT MAX(updated_at) FROM agent_proposals b WHERE b.owner = a.owner AND b.dedup_key = a.dedup_key AND b.status = 'dismissed') LIMIT 500`,
+    )
     .bind(owner)
     .all<{ dedup_key: string; params: string }>();
   const ts = now.toISOString();
@@ -158,7 +176,8 @@ export async function runAgent(deps: AgentDeps, user: User, opts: { force?: bool
         .bind(crypto.randomUUID(), owner, d.type, d.dedupKey, JSON.stringify(d.params), ts, ts, d.expiresAt),
     );
   }
-  if (stmts.length) await db.batch(stmts);
+  // Chunked for D1; ON CONFLICT DO NOTHING / status guards make a retry after a partial failure idempotent.
+  for (let i = 0; i < stmts.length; i += WRITE_CHUNK) await db.batch(stmts.slice(i, i + WRITE_CHUNK));
   return listProposals(db, user);
 }
 
