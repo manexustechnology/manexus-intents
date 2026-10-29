@@ -45,9 +45,10 @@ npm run dev:api               # terminal 2: wrangler Pages on http://localhost:2
 npm test            # node:test unit and server tests
 npm run typecheck   # app and functions
 npm run build       # typecheck + vite build
-# browser tests (mocked /api, desktop and mobile projects):
-npm run build && npx vite preview --port 24012 &
-PLAYWRIGHT_BASE_URL=http://127.0.0.1:24012 npx playwright test tests/browser --workers=1
+npm run build        # then, in a second terminal:
+npx vite preview --port 24012   # stop it with Ctrl+C when done
+# back in the first terminal (mocked /api, desktop and mobile projects):
+PLAYWRIGHT_BASE_URL=http://127.0.0.1:24012 npm run test:e2e -- --workers=1
 ```
 
 `tests/browser/core-loop.spec.ts` runs the whole loop (sign in, invoice, payer pays from a second browser context, balance, withdraw) against a fake `/api` and asserts no horizontal overflow at 390 px. No test moves real funds.
@@ -55,12 +56,12 @@ PLAYWRIGHT_BASE_URL=http://127.0.0.1:24012 npx playwright test tests/browser --w
 ## Honest boundaries
 
 - **Mainnet only.** NEAR Intents has no testnet; everything real runs on mainnet. Use small amounts.
-- **Security incident context.** NEAR Intents had a reported exploit on 2026-10-01; see the public postmortem. Treat the protocol as having risk and do not hold more than you can lose.
+- **Security incident context.** NEAR Intents was reported to have lost roughly $3.8M to an exploit on 2026-10-01 (third-party report: https://shattered.io/near-intents-3-8m-hack-postmortem-clears-omni-2026/). Check current NEAR Intents announcements before moving meaningful amounts.
 - **Non-custodial.** Funds sit in your `intents.near` account, controlled by your wallet. Manexus holds no keys and cannot move them. Withdrawals need your signature.
 - **No fiat.** Crypto stablecoins only; no card or bank rails, no tax or legal/accounting claims.
 - **Fees.** 1Click quotes include provider fees and slippage; the payer pays the quoted amount, the owner receives the invoice total. Without a partner API key 1Click adds an extra 0.25% platform fee.
 - **Named NEAR accounts** (`alice.near`) must register their public key on `intents.near` once (a wallet-approved `add_public_key` call, 1 yoctoNEAR plus gas) before they can sign withdrawals; the app guides this step. EVM accounts need no registration.
-- `npm audit --omit=dev` reports advisories (3 high) in transitive dependencies of the Meteor wallet SDK bundled in the browser app (`@meteorwallet/sdk`, `nanoid`, `@near-js/*`); no fix is available upstream without breaking changes and they were not auto-fixed.
+- `npm audit --omit=dev` reports 25 advisories (3 high, 8 moderate, 14 low) in wallet-SDK transitive dependencies (e.g. `@meteorwallet/sdk`, `nanoid`, `@hot-wallet/sdk`, `@solana/web3.js`); fixes require breaking upgrades.
 - Balance USD figures are reference prices only.
 
 ## Hackathon work vs. pre-existing baseline
@@ -110,7 +111,7 @@ Gates before calling the deployment ready (none of these have been run with real
 - [ ] Live small invoice payment: issue a ~1 USDC invoice, pay from another wallet (for example USDC on Arbitrum), confirm the invoice flips to Paid and the Home balance shows it.
 - [ ] Live small withdrawal from an **EVM** account to an Arbitrum/Base address.
 - [ ] Live small withdrawal from a **named NEAR account**, including first-time key registration. This also verifies the strict generated-intent shape check in `server/withdraw.ts` against the real 1Click quote.
-- [ ] Real wallet sign-in check with Meteor, HOT and MetaMask.
+- [ ] Real wallet sign-in check with Meteor, HOT and MetaMask; verify the CSP in `public/_headers` allows the wallet's network calls (browser console shows no CSP violations); adjust origins if needed.
 - [ ] Record resulting transaction hashes in `docs/NEAR-INTENTS.md`.
 
 ## Roadmap
