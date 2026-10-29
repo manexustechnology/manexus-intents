@@ -1,0 +1,42 @@
+{
+  "quote": {
+    "amountIn": "1000000",
+    "amountInFormatted": "1.0",
+    "amountInUsd": "0.999487000000",
+    "minAmountIn": "1000000",
+    "amountOut": "994498",
+    "amountOutFormatted": "0.994498",
+    "amountOutUsd": "0.993987822526",
+    "minAmountOut": "984553",
+    "timeEstimate": 9,
+    "refundFee": "0",
+    "withdrawFee": "5300"
+  },
+  "quoteRequest": {
+    "dry": true,
+    "depositMode": "SIMPLE",
+    "swapType": "EXACT_INPUT",
+    "slippageTolerance": 100,
+    "originAsset": "nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1",
+    "depositType": "INTENTS",
+    "destinationAsset": "nep141:arb-0xaf88d065e77c8cc2239327c5edb3a432268e5831.omft.near",
+    "amount": "1000000",
+    "refundTo": "manexus-spike.near",
+    "refundType": "INTENTS",
+    "recipient": "0x0000000000000000000000000000000000000002",
+    "recipientType": "DESTINATION_CHAIN",
+    "deadline": "2026-10-29T11:41:08.859Z",
+    "confidentiality": "public",
+    "quoteWaitingTimeMs": 0,
+    "insured": false,
+    "appFees": [
+      {
+        "recipient": "5880ad2b362620fadf759cbceb1cd5737ce8c6ed7fb8e9942881e6731f9247dd",
+        "fee": 1
+      }
+    ]
+  },
+  "signature": "ed25519:4v99X5FLM7bKwcufQgwWX2mxQVALBok2jExVx6mjMm7MfYJKuXhAUh3X2Pd9fp9LcHKcASfqZ9qSSH357nXnmobi",
+  "timestamp": "2026-10-29T11:11:10.425Z",
+  "correlationId": "a2821f30-9a94-42b9-8517-1754b964e624"
+}
