@@ -1,6 +1,7 @@
 import "./style.css";
 import { escapeHTML as esc } from "../shared/text.ts";
 import { api, ApiError } from "./api.ts";
+import { mountHome } from "./views/home.ts";
 import { mountInvoice } from "./views/invoice-detail.ts";
 import { mountInvoices } from "./views/invoices.ts";
 import { mountPay } from "./views/pay.ts";
@@ -48,7 +49,7 @@ const placeholder =
     el.innerHTML = `<div class="heading"><div><h1>${esc(title)}</h1><p class="muted">Coming soon.</p></div></div>`;
     return () => {};
   };
-registerView("home", placeholder("Home"));
+registerView("home", mountHome);
 registerView("invoices", mountInvoices);
 registerView("invoice", mountInvoice);
 registerView("withdraw", placeholder("Withdraw"));

@@ -1479,3 +1479,12 @@ a.primary {
 #pay-token {
   width: 100%;
 }
+
+/* Home */
+.home-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+.home-total { font-size: 30px; font-weight: 600; margin: 6px 0; }
+.home-total small { font-size: 12px; font-weight: 400; color: #819086; }
+.home-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 12px; margin-top: 14px; }
+.home-card { display: flex; flex-direction: column; gap: 4px; padding: 14px 16px; border: 1px solid #e1e8e2; border-radius: 11px; }
+main > .panel { margin-bottom: 16px; }
+a.secondary { display: inline-flex; align-items: center; padding: 0 16px; min-height: 40px; border: 1px solid #cfd9d1; border-radius: 10px; color: #1f2d24; text-decoration: none; font-weight: 600; background: #fff; }
