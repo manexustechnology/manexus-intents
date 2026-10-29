@@ -25,3 +25,9 @@ test("dollarsToCents parses plain dollar amounts only", () => {
   assert.equal(dollarsToCents(" 0.07 "), 7);
   for (const bad of ["", "1.234", "-1", "1e3", "abc"]) assert.equal(dollarsToCents(bad), undefined);
 });
+
+test("sweep reason says when the amount was limited by the per-transaction cap", () => {
+  const c = { ...ctx, balances: [], tokens: [], policy: { version: 1 as const, sweep: { enabled: true, tokenId: USDC, thresholdUnits: "100000000", keepUnits: "10000000", whitelistId: "x" } } };
+  assert.equal(proposalReason({ type: "sweep", params: { originAsset: USDC, amount: "50000000", whitelistId: "x", limitedByCap: "true" } }, c), "Sweep 50 USDC to your whitelisted address (limited by your per-transaction cap)");
+  assert.equal(proposalReason({ type: "sweep", params: { originAsset: USDC, amount: "50000000", whitelistId: "x" } }, c), "Sweep 50 USDC to your whitelisted address (keeps 10 USDC)");
+});

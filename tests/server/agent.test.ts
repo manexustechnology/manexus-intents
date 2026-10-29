@@ -292,3 +292,12 @@ test("routes: GET proposals and POST dismiss need a session and are owner scoped
   assert.deepEqual(((await g.json()) as { id: string }[]).map((x) => x.id), [p.id]);
   assert.equal((await dismissPost({ request: new Request(`${url}/${p.id}/dismiss`, { method: "POST", headers: { cookie: ali } }), env, params: { id: p.id } } as never)).status, 200);
 });
+
+test("sweep: amount is clipped to the per-transaction cap for that token and marked as limited", () => {
+  const sweep = { enabled: true, tokenId: USDC, thresholdUnits: "100", keepUnits: "30", whitelistId: "w1" };
+  const capped = (cap: Record<string, string>) => evaluate(input({ policy: P({ sweep, limits: { perTx: cap, daily: {}, whitelistOnly: false } }), balances: [bal(USDC, "101")] }));
+  assert.deepEqual(capped({ [USDC]: "50" }).map((d) => d.params), [{ originAsset: USDC, amount: "50", whitelistId: "w1", limitedByCap: "true" }]);
+  // At or above the sweep amount, or a cap on another token: not limited.
+  assert.deepEqual(capped({ [USDC]: "71" }).map((d) => d.params), [{ originAsset: USDC, amount: "71", whitelistId: "w1" }]);
+  assert.deepEqual(capped({ [USDT]: "1" }).map((d) => d.params), [{ originAsset: USDC, amount: "71", whitelistId: "w1" }]);
+});

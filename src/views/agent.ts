@@ -59,6 +59,7 @@ export function proposalReason(p: Pick<Proposal, "type" | "params">, ctx: Reason
     const t = tokenInfo(ctx, x.originAsset);
     const to = ctx.whitelist.find((w) => w.id === x.whitelistId)?.label ?? "your whitelisted address";
     const keep = ctx.policy?.sweep?.tokenId === x.originAsset ? ctx.policy.sweep.keepUnits : undefined;
+    if (x.limitedByCap === "true") return `Sweep ${units(x.amount, t)} to ${to} (limited by your per-transaction cap)`;
     return `Sweep ${units(x.amount, t)} to ${to}${keep !== undefined ? ` (keeps ${units(keep, t)})` : ""}`;
   }
   if (p.type === "pay_bill") {

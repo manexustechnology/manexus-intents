@@ -23,7 +23,6 @@ const NONCE = Buffer.alloc(32, 7).toString("base64");
 const ALICE = { account: "alice.near", kind: "near" as const };
 const MALLORY = { account: "mallory.near", kind: "near" as const };
 const ORIGIN = "https://app.manexus.test";
-const PER_TX = "This exceeds your per-transaction limit";
 const DAILY = "This exceeds your 24-hour limit";
 const TOKENS: OneClickToken[] = [
   { assetId: USDC, symbol: "USDC", blockchain: "near", decimals: 6, price: 1 },
@@ -208,7 +207,9 @@ test("spending limits still apply to approved sweeps and bills; a refused quote 
   await setPolicy(w.db, ALICE.account, { ...SWEEP, ...REMIND, limits: { perTx: { [USDC]: "100000000" }, daily: { [USDC]: "1000000" }, whitelistOnly: true } });
   const ps = await runAgent(w.deps(), ALICE);
   const sweep = byType(ps, "sweep"), bill = byType(ps, "pay_bill");
-  await rejectsWith(approveProposal(w.deps(), ALICE, sweep.id, {}), 400, PER_TX);
+  // The sweep is clipped to the 100 USDC per-transaction cap; the 1 USDC daily cap still refuses it.
+  assert.deepEqual(sweep.params, { originAsset: USDC, amount: "100000000", whitelistId: "w1", limitedByCap: "true" });
+  await rejectsWith(approveProposal(w.deps(), ALICE, sweep.id, {}), 400, DAILY);
   assert.equal((await status(w.db, sweep.id)).status, "proposed");
   // Bill: amountIn 1010000 > the 1000000 daily cap (checked after the quote on EXACT_OUTPUT); vendor not whitelisted either.
   await rejectsWith(approveProposal(w.deps(), ALICE, bill.id, { originAsset: USDC }), 400);

@@ -76,9 +76,19 @@ export function evaluate(input: EvalInput): ProposalDraft[] {
   if (s?.enabled && !busy.has(s.tokenId) && whitelist.some((w) => w.id === s.whitelistId)) {
     const bal = balances.find((b) => b.tokenId === s.tokenId);
     if (bal && isUnits(bal.amount) && BigInt(bal.amount) > BigInt(s.thresholdUnits)) {
-      const amount = BigInt(bal.amount) - BigInt(s.keepUnits);
+      let amount = BigInt(bal.amount) - BigInt(s.keepUnits);
+      // Never suggest more than the per-transaction cap allows (the transfer engine would refuse it); the rest
+      // is swept by later suggestions once this one is done.
+      const capRaw = policy.limits && Object.hasOwn(policy.limits.perTx, s.tokenId) ? policy.limits.perTx[s.tokenId] : undefined;
+      const cap = capRaw !== undefined && isUnits(capRaw) ? BigInt(capRaw) : undefined;
+      const limited = cap !== undefined && amount > cap;
+      if (limited) amount = cap;
       if (amount > 0n)
-        out.push({ type: "sweep", dedupKey: `sweep:${s.tokenId}:${s.whitelistId}`, params: { originAsset: s.tokenId, amount: amount.toString(), whitelistId: s.whitelistId }, expiresAt: hourLater });
+        out.push({
+          type: "sweep", dedupKey: `sweep:${s.tokenId}:${s.whitelistId}`,
+          params: { originAsset: s.tokenId, amount: amount.toString(), whitelistId: s.whitelistId, ...(limited ? { limitedByCap: "true" } : {}) },
+          expiresAt: hourLater,
+        });
     }
   }
 
