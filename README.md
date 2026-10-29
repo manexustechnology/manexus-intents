@@ -279,21 +279,23 @@ c826e55 chore: drop unneeded @types/node from functions typecheck
 
 ## Deploy (maintainer)
 
-Not performed as part of this repository state. Deployment: see this section; no production URL is claimed.
+Production is the Cloudflare Pages project `manexus-intents` (https://manexus-intents.pages.dev) with the D1 database `manexus-intents`; `wrangler.toml` is the source of truth for its bindings and plain variables.
+
+**Automatic:** `.github/workflows/deploy.yml` runs `npm test` and `npm run build` on every pull request. A push to `main` runs the same checks, applies new D1 migrations (`wrangler d1 migrations apply --remote`), deploys `dist` to Pages and checks `/api/health`. It needs the repository secret `CLOUDFLARE_API_TOKEN` (account permissions: Cloudflare Pages Edit, D1 Edit) and the repository variable `CLOUDFLARE_ACCOUNT_ID`.
+
+**Secrets** live in the Pages project, not in the repo, and a deploy keeps them:
 
 ```sh
-# 1. 1Click partner key (optional, removes the extra 0.25% fee): register at https://partners.near-intents.org
-# 2. Database
-npx wrangler d1 create manexus-intents          # put the returned id in wrangler.toml (database_id)
-npx wrangler d1 migrations apply manexus-intents --remote
-# 3. Secrets and binding
 npx wrangler pages secret put SESSION_SECRET --project-name manexus-intents
-npx wrangler pages secret put ONECLICK_API_KEY --project-name manexus-intents
-# optional: enables AI rule drafting and the treasury summary (off without it)
-npx wrangler pages secret put NEAR_AI_API_KEY --project-name manexus-intents
-# bind the D1 database as DB in the Pages project settings
-# 4. Deploy
+npx wrangler pages secret put ONECLICK_API_KEY --project-name manexus-intents  # optional: removes the extra 0.25% fee (https://partners.near-intents.org)
+npx wrangler pages secret put NEAR_AI_API_KEY --project-name manexus-intents   # optional: AI rule drafting and summary
+```
+
+**Manual deploy** (same steps as the workflow):
+
+```sh
 npm run build
+npx wrangler d1 migrations apply manexus-intents --remote
 npx wrangler pages deploy dist --project-name manexus-intents --branch main
 curl -s https://manexus-intents.pages.dev/api/health     # expect {"ok":true}
 ```
