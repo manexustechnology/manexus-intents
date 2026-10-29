@@ -24,6 +24,8 @@ export type AttemptRow = {
 };
 
 export type PaymentAttemptView = {
+  symbol: string;
+  blockchain: string;
   depositAddress: string;
   depositMemo?: string;
   originAsset: string;
@@ -75,15 +77,17 @@ export async function saveAttempt(db: Db, a: AttemptRow): Promise<void> {
     .run();
 }
 
-/** Payer-facing view. Decimals are not stored, so amountInFormatted comes from `decimals` when known. */
-export function toAttemptView(row: AttemptRow, now: Date, decimals?: number): PaymentAttemptView {
+/** Payer-facing view. Decimals are not stored, so the caller supplies the origin token. */
+export function toAttemptView(row: AttemptRow, now: Date, origin: { symbol: string; blockchain: string; decimals: number }): PaymentAttemptView {
   const expired = row.status === "PENDING_DEPOSIT" && new Date(row.deadline).getTime() < now.getTime();
   return {
+    symbol: origin.symbol,
+    blockchain: origin.blockchain,
     depositAddress: expired ? "" : row.depositAddress,
     ...(!expired && row.depositMemo ? { depositMemo: row.depositMemo } : {}),
     originAsset: row.originAsset,
     amountIn: row.amountIn,
-    amountInFormatted: decimals === undefined ? row.amountIn : formatAmount(BigInt(row.amountIn), decimals),
+    amountInFormatted: formatAmount(BigInt(row.amountIn), origin.decimals),
     deadline: row.deadline,
     status: row.status,
     ...(row.outcome ? { outcome: row.outcome } : {}),
@@ -131,7 +135,8 @@ export async function createPaymentQuote(
     referral: "manexus",
   };
   const q = await oneclick.quote(request);
-  if (!q.depositAddress) throw new HttpError(502, "NEAR Intents returned an unexpected response");
+  if (!q.depositAddress || !/^[0-9]+$/.test(q.amountIn) || Number.isNaN(new Date(q.deadline).getTime()))
+    throw new HttpError(502, "NEAR Intents returned an unexpected response");
 
   const row: AttemptRow = {
     depositAddress: q.depositAddress,
@@ -140,7 +145,7 @@ export async function createPaymentQuote(
     createdAt: now.toISOString(), updatedAt: now.toISOString(),
   };
   await saveAttempt(db, row);
-  return toAttemptView(row, now, token.decimals);
+  return toAttemptView(row, now, token);
 }
 
 export async function submitDepositTx(deps: Deps, publicId: string, body: { depositAddress: string; txHash: string }): Promise<void> {

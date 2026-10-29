@@ -21,9 +21,10 @@ const draft: InvoiceDraft = {
 const tokens = (JSON.parse(readFileSync("tests/fixtures/oneclick/tokens.json", "utf8")) as OneClickToken[]).map((t) => ({
   assetId: t.assetId, symbol: t.symbol, blockchain: t.blockchain, decimals: t.decimals,
 }));
-const fx = JSON.parse(readFileSync("tests/fixtures/oneclick/quote-pay-exact-output.json", "utf8")).quote;
 
-function fake() {
+const ORIGIN = { symbol: "USDC", blockchain: "arb", decimals: 6 };
+
+function fake(over: Partial<{ amountIn: string; deadline: string }> = {}) {
   const calls = { quote: [] as QuoteRequest[], deposit: [] as [string, string][] };
   let n = 0;
   const oneclick = {
@@ -31,8 +32,8 @@ function fake() {
     quote: async (r: QuoteRequest) => {
       calls.quote.push(r);
       return {
-        depositAddress: `dep${++n}`, amountIn: "710180", minAmountIn: "700000", amountOut: r.amount, minAmountOut: r.amount,
-        deadline: r.deadline,
+        depositAddress: `dep${++n}`, amountIn: over.amountIn ?? "710180", minAmountIn: "700000", amountOut: r.amount, minAmountOut: r.amount,
+        deadline: over.deadline ?? r.deadline,
       };
     },
     submitDeposit: async (tx: string, addr: string) => void calls.deposit.push([tx, addr]),
@@ -98,13 +99,16 @@ test("an expired pending attempt hides its deposit address", async () => {
   await createPaymentQuote(deps, inv.publicId, { originAsset: ARB, refundTo: REFUND });
   const [row] = await listAttempts(db, inv.id);
   const later = new Date("2030-01-01T00:31:00.000Z");
-  const v = toAttemptView(row, later);
+  const v = toAttemptView(row, later, ORIGIN);
+  assert.equal(v.symbol, "USDC");
+  assert.equal(v.blockchain, "arb");
+  assert.equal(v.amountInFormatted, "0.71018");
   assert.equal(v.expired, true);
   assert.equal(v.depositAddress, "");
   assert.equal("depositMemo" in v, false);
-  const live = toAttemptView({ ...row, depositMemo: "m1" }, NOW);
+  const live = toAttemptView({ ...row, depositMemo: "m1" }, NOW, ORIGIN);
   assert.equal(live.depositMemo, "m1");
-  const done = toAttemptView({ ...row, status: "SUCCESS", outcome: "paid" }, later);
+  const done = toAttemptView({ ...row, status: "SUCCESS", outcome: "paid" }, later, ORIGIN);
   assert.equal(done.expired, false);
   assert.equal(done.outcome, "paid");
   assert.equal(done.depositAddress, row.depositAddress);
@@ -139,5 +143,14 @@ test("saveAttempt round-trips and getInvoiceByPublicId hides drafts", async () =
   assert.equal((await getInvoiceByPublicId(db, inv.publicId)).id, inv.id);
   const d = await createInvoice(db, OWNER, draft, NOW.toISOString());
   assert.equal(await status(getInvoiceByPublicId(db, d.publicId)), 404);
-  void fx;
+});
+
+test("malformed upstream quotes are rejected before saving", async () => {
+  for (const over of [{ amountIn: "1.5" }, { amountIn: "" }, { deadline: "soon" }]) {
+    const { db, inv, oneclick } = await setup();
+    const deps = { db, oneclick: fake(over).oneclick, now: NOW };
+    void oneclick;
+    assert.equal(await status(createPaymentQuote(deps, inv.publicId, { originAsset: ARB, refundTo: REFUND })), 502);
+    assert.equal((await listAttempts(db, inv.id)).length, 0);
+  }
 });

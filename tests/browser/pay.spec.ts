@@ -28,7 +28,7 @@ async function mock(page: Page, status = "issued", deadline = new Date(Date.now(
       seen.quote = JSON.parse(req.postData()!);
       return r.fulfill({
         status: 201,
-        json: { depositAddress: "0xDEPOSIT", depositMemo: "memo-7", originAsset: ARB, amountIn: "710180", amountInFormatted: "0.71018", deadline, status: "PENDING_DEPOSIT", expired: false },
+        json: { symbol: "USDC", blockchain: "arb", depositAddress: "0xDEPOSIT", depositMemo: "memo-7", originAsset: ARB, amountIn: "710180", amountInFormatted: "0.71018", deadline, status: "PENDING_DEPOSIT", expired: false },
       });
     }
     if (path.endsWith("/deposit")) {

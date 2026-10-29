@@ -6,6 +6,7 @@ import { details } from "./invoice-detail.ts";
 
 type Token = { assetId: string; symbol: string; blockchain: string; decimals: number };
 type Attempt = {
+  symbol: string; blockchain: string;
   depositAddress: string; depositMemo?: string; originAsset: string; amountIn: string; amountInFormatted: string;
   deadline: string; status: string; outcome?: string; expired: boolean;
 };
@@ -79,11 +80,10 @@ export function mountPay(el: HTMLElement, params: Record<string, string>): () =>
   }
 
   function instructions(a: Attempt): string {
-    const t = tokenOf(a.originAsset);
     const done = a.status !== "PENDING_DEPOSIT";
     return `<section class="panel pay-instructions"><div class="section-title"><h2>Send payment</h2></div>
-<p class="invoice-total"><span>Send exactly</span><strong id="pay-amount">${esc(a.amountInFormatted)} ${esc(t?.symbol ?? "")}</strong></p>
-<p class="muted">on ${esc(t?.blockchain ?? "the selected chain")}</p>
+<p class="invoice-total"><span>Send exactly</span><strong id="pay-amount">${esc(a.amountInFormatted)} ${esc(a.symbol)}</strong></p>
+<p class="muted">on ${esc(a.blockchain)}</p>
 <div class="pay-field"><span class="eyebrow">DEPOSIT ADDRESS</span><code id="pay-address">${esc(a.depositAddress)}</code><button class="textbutton" type="button" data-copy="${esc(a.depositAddress)}">Copy address</button></div>
 ${a.depositMemo ? `<div class="pay-field"><span class="eyebrow">MEMO (REQUIRED)</span><code id="pay-memo">${esc(a.depositMemo)}</code><button class="textbutton" type="button" data-copy="${esc(a.depositMemo)}">Copy memo</button></div>` : ""}
 <p class="fine">Send exactly this amount from the selected chain. Unused amount is refunded to your refund address.</p>
