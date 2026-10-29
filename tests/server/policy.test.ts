@@ -544,6 +544,73 @@ test("submit re-checks the policy: a tightened cap or a removed whitelist entry 
   assert.equal(f.calls.submit, 0);
 });
 
+test("submit recounts after the claim: two submits racing past the pre-claim check do not both relay", async () => {
+  const db = createTestDb();
+  const f = fakes();
+  const a = await quoteTransfer(deps(db, f), NEAR_USER, withdrawReq());
+  const b = await quoteTransfer(deps(db, f), NEAR_USER, withdrawReq());
+  await setPolicy(db, NEAR_USER.account, limits({ daily: { [USDC]: "1500000" } }));
+  // While a's claim runs, b's concurrent submit has already claimed b (both passed the pre-claim check).
+  const raced: Db = {
+    batch: (s) => db.batch(s),
+    prepare(sql: string) {
+      const s = db.prepare(sql);
+      if (!sql.includes("SET status = 'PROCESSING'")) return s;
+      return {
+        bind(...v: unknown[]) {
+          const bound = s.bind(...v);
+          return {
+            ...bound,
+            run: async () => {
+              await db.prepare("UPDATE withdrawals SET status = 'PROCESSING' WHERE deposit_address = ?").bind(b.depositAddress).run();
+              return bound.run();
+            },
+          };
+        },
+      } as ReturnType<Db["prepare"]>;
+    },
+  };
+  await rejectsWith(submitTransfer({ ...deps(db, f), db: raced }, NEAR_USER, signed(a)), 400, DAILY);
+  assert.equal(f.calls.submit, 0);
+  const row = await db.prepare("SELECT status, upstream, intent_hash FROM withdrawals WHERE deposit_address = ?").bind(a.depositAddress).first<{ status: string; upstream: string | null; intent_hash: string | null }>();
+  assert.deepEqual({ ...row }, { status: "AWAITING_SIGNATURE", upstream: null, intent_hash: null });
+});
+
+test("committedOnly counts an unsigned quote whose relay was attempted (unexpired), but not the row being submitted", async () => {
+  const db = createTestDb();
+  const f = fakes();
+  const a = await quoteTransfer(deps(db, f), NEAR_USER, withdrawReq());
+  const b = await quoteTransfer(deps(db, f), NEAR_USER, withdrawReq());
+  // a's relay was attempted and failed (it may still land): it is committed for the 24 h window.
+  await db.prepare("UPDATE withdrawals SET upstream = ? WHERE deposit_address = ?").bind(JSON.stringify({ submitError: "x", submitAttemptedAt: NOW.toISOString() }), a.depositAddress).run();
+  await setPolicy(db, NEAR_USER.account, limits({ daily: { [USDC]: "1500000" } }));
+  await rejectsWith(submitTransfer(deps(db, f), NEAR_USER, signed(b)), 400, DAILY);
+  // Retrying a itself does not count a twice.
+  await submitTransfer(deps(db, f), NEAR_USER, signed(a));
+  assert.equal(f.calls.submit, 1);
+  // b was refused and stays unsigned.
+  const c = await db.prepare("SELECT COUNT(*) AS n FROM withdrawals WHERE status = 'AWAITING_SIGNATURE'").bind().first<{ n: number }>();
+  assert.equal(c?.n, 1);
+});
+
+test("an attempted unsigned quote past its deadline does not count as committed", async () => {
+  const db = createTestDb();
+  await transferRow(db, { status: "AWAITING_SIGNATURE", amount: "1000000", deadline: "2029-12-31T23:59:00.000Z" });
+  await db.prepare("UPDATE withdrawals SET upstream = ?").bind(JSON.stringify({ submitAttemptedAt: "2029-12-31T23:58:00.000Z" })).run();
+  await setPolicy(db, NEAR_USER.account, limits({ daily: { [USDC]: "1000000" } }));
+  await enforceLimits(deps(db), NEAR_USER, withdrawReq(), 1000000n, { committedOnly: true });
+});
+
+test("whitelist match includes the recipient type", async () => {
+  const db = createTestDb();
+  await setPolicy(db, NEAR_USER.account, limits({ whitelistOnly: true }));
+  const addr = CHECKSUM_DEST.toLowerCase();
+  // Listed as an Intents account, not as an Arbitrum address.
+  await db.prepare("INSERT INTO whitelist (id, owner, label, destination_asset, recipient_type, recipient, created_at) VALUES ('w', ?, 'L', ?, 'INTENTS', ?, ?)").bind(NEAR_USER.account, ARB_USDC, addr, NOW.toISOString()).run();
+  await rejectsWith(quoteTransfer(deps(db), NEAR_USER, withdrawReq({ destinationAsset: ARB_USDC, recipientType: "DESTINATION_CHAIN", recipient: CHECKSUM_DEST })), 400, NOT_LISTED);
+  await quoteTransfer(deps(db), NEAR_USER, withdrawReq({ destinationAsset: ARB_USDC, recipientType: "INTENTS", recipient: addr }));
+});
+
 test("query budget: a quote under a full policy and its submit stay small", async () => {
   const db = createTestDb();
   await billRow(db, "bill-manual", "manual");

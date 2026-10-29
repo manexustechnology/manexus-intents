@@ -293,17 +293,21 @@ export async function removeWhitelist(deps: SignDeps, user: User, body: Signed &
 }
 
 /** Base units of `originAsset` that left or may still leave the owner's balance in non-swap transfers in the last 24 h. */
-async function spentInWindow(db: Db, owner: string, originAsset: string, now: Date, committedOnly: boolean): Promise<bigint> {
+async function spentInWindow(db: Db, owner: string, originAsset: string, now: Date, committedOnly: boolean, exclude: string | null): Promise<bigint> {
   // Amounts are summed as bigint (SQL SUM would lose precision on 24-decimal tokens). Counted: every status
-  // that may move funds (PROCESSING, SUCCESS and the in-flight 1Click statuses), plus, unless committedOnly,
-  // unsigned quotes that can still be signed. REFUNDED/FAILED and expired unsigned quotes moved nothing.
+  // that may move funds (PROCESSING, SUCCESS and the in-flight 1Click statuses), plus unexpired unsigned
+  // quotes: all of them normally, only those whose relay was attempted (upstream set, it may still land) when
+  // committedOnly. REFUNDED/FAILED and expired unsigned quotes moved nothing. `exclude` leaves out the row
+  // being submitted (its amount is passed separately).
+  // The window keys on created_at (quote time), not on when the transfer was signed or settled.
   const ts = now.toISOString();
   const { results } = await db
     .prepare(
-      `SELECT amount FROM withdrawals WHERE owner = ? AND origin_asset = ? AND NOT (kind = 'swap' AND recipient = owner) AND created_at > ?
-       AND (status NOT IN ('AWAITING_SIGNATURE', 'REFUNDED', 'FAILED') OR (? = 0 AND status = 'AWAITING_SIGNATURE' AND json_extract(intent, '$.deadline') > ?))`,
+      `SELECT amount FROM withdrawals WHERE owner = ? AND origin_asset = ? AND NOT (kind = 'swap' AND recipient = owner) AND created_at > ? AND deposit_address != ?
+       AND (status NOT IN ('AWAITING_SIGNATURE', 'REFUNDED', 'FAILED')
+            OR (status = 'AWAITING_SIGNATURE' AND json_extract(intent, '$.deadline') > ? AND (? = 0 OR upstream IS NOT NULL)))`,
     )
-    .bind(owner, originAsset, new Date(now.getTime() - DAY_MS).toISOString(), committedOnly ? 1 : 0, ts)
+    .bind(owner, originAsset, new Date(now.getTime() - DAY_MS).toISOString(), exclude ?? "", ts, committedOnly ? 1 : 0)
     .all<{ amount: string }>();
   return results.reduce((n, r) => n + (/^[0-9]{1,78}$/.test(r.amount) ? BigInt(r.amount) : 0n), 0n);
 }
@@ -316,25 +320,26 @@ async function spentInWindow(db: Db, owner: string, originAsset: string, now: Da
  *
  * The transfer engine calls this before the quote (EXACT_INPUT with the amount, EXACT_OUTPUT with 0n: the
  * whitelist and an exhausted daily cap), after the quote on EXACT_OUTPUT's `amountIn`, and again in
- * submitTransfer just before the guarded claim with `committedOnly` (see there). Payroll lines are separate
+ * submitTransfer just before the guarded claim with `committedOnly` (and once more after it, `dailyOnly`; see
+ * there). The whitelist matches on destination asset, recipient type and recipient. Payroll lines are separate
  * transfers, so each line is capped and they accumulate in the 24 h window.
  */
 export async function enforceLimits(
   deps: { db: Db; now: Date }, user: User,
-  req: Pick<TransferRequest, "kind" | "originAsset" | "destinationAsset" | "recipient" | "billId">,
-  amountLeaving: bigint, opts: { committedOnly?: boolean } = {},
+  req: Pick<TransferRequest, "kind" | "originAsset" | "destinationAsset" | "recipientType" | "recipient" | "billId">,
+  amountLeaving: bigint, opts: { committedOnly?: boolean; exclude?: string; dailyOnly?: boolean } = {},
 ): Promise<void> {
   // A swap stays in the owner's own account (server/swaps.ts); anything sent elsewhere is limited.
   if (req.kind === "swap" && req.recipient === user.account) return;
   const row = await loadPolicy(deps.db, user.account);
   const l = row ? parsedRow(row).limits : undefined;
   if (!l) return;
-  if (Object.hasOwn(l.perTx, req.originAsset) && amountLeaving > BigInt(l.perTx[req.originAsset])) throw bad(PER_TX_LIMIT);
+  if (!opts.dailyOnly && Object.hasOwn(l.perTx, req.originAsset) && amountLeaving > BigInt(l.perTx[req.originAsset])) throw bad(PER_TX_LIMIT);
   if (Object.hasOwn(l.daily, req.originAsset)) {
-    const spent = await spentInWindow(deps.db, user.account, req.originAsset, deps.now, opts.committedOnly === true);
+    const spent = await spentInWindow(deps.db, user.account, req.originAsset, deps.now, opts.committedOnly === true, opts.exclude ?? null);
     if (spent + amountLeaving > BigInt(l.daily[req.originAsset])) throw bad(DAILY_LIMIT);
   }
-  if (!l.whitelistOnly) return;
+  if (opts.dailyOnly || !l.whitelistOnly) return;
   if (req.kind === "bill" && typeof req.billId === "string") {
     // Exempt only when this transfer pays exactly the imported invoice's owner in the invoice token.
     const b = await deps.db
@@ -344,8 +349,8 @@ export async function enforceLimits(
     if (b?.source === "manexus" && b.destination_asset === req.destinationAsset && b.recipient === req.recipient.trim()) return;
   }
   const hit = await deps.db
-    .prepare("SELECT id FROM whitelist WHERE owner = ? AND destination_asset = ? AND recipient = ?")
-    .bind(user.account, req.destinationAsset, normRecipient(req.recipient.trim()))
+    .prepare("SELECT id FROM whitelist WHERE owner = ? AND destination_asset = ? AND recipient_type = ? AND recipient = ?")
+    .bind(user.account, req.destinationAsset, req.recipientType, normRecipient(req.recipient.trim()))
     .first<{ id: string }>();
   if (!hit) throw bad(NOT_WHITELISTED);
 }
