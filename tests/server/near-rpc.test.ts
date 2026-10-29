@@ -42,3 +42,14 @@ test("viewFunction encodes args and decodes the JSON result", async () => {
   assert.equal(seen[0].params.method_name, "mt_batch_balance_of");
   assert.equal(Buffer.from(seen[0].params.args_base64, "base64").toString(), '{"account_id":"a.near"}');
 });
+
+test("every RPC request carries a timeout signal; fetch is called bare", async () => {
+  let signal: unknown;
+  const f = (async function (this: unknown, _url: string, init: RequestInit) {
+    if (this !== undefined) throw new Error("Illegal invocation");
+    signal = init.signal;
+    return new Response(JSON.stringify({ result: { permission: "FullAccess" } }), { status: 200 });
+  }) as typeof fetch;
+  await createNearRpc("u", f).viewAccessKey("a.near", "k");
+  assert.ok(signal instanceof AbortSignal);
+});

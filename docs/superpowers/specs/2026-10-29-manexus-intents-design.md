@@ -49,3 +49,10 @@ Illustrative price calculator, local swap simulation, tokenized-asset concept ga
 - All outbound money movement (withdraw, swap, bill, payroll) uses one transfer engine: 1Click quote → generated intent → owner signs → server relays the exact stored payload.
 - Bill pay: paste a Manexus invoice link (paid into the vendor's Intents account and reconciled on the vendor invoice) or enter a manual address on any supported chain. Bills and payroll pay the exact recipient amount (`EXACT_OUTPUT`).
 - Payroll: CSV upload or saved payees; one signed intent per line, signed sequentially; at most 50 lines per batch.
+
+## Plan 3 decisions (2026-10-30)
+
+- Agent proposes, owner approves every action with one wallet signature; no delegated keys; the server never signs. Plan: `docs/superpowers/plans/2026-10-30-plan3-ai-treasury-agent.md`.
+- NEAR AI Cloud drafts policies from plain language and writes treasury summaries; drafts pass the same strict validator and need the owner's signature; LLM output never becomes an amount, token or address.
+- Rules: auto-convert to stablecoin, auto-sweep to whitelist (keep balance), spending limits (per-tx, 24 h, whitelist-only), bill-due and invoice-overdue reminders. Policy and whitelist changes are wallet-signed.
+- Submission package (docs/SUBMISSION.md, judge quickstart) is part of Plan 3; tracks 08 (primary), 04, 06.

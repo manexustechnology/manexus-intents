@@ -1609,3 +1609,21 @@ a.secondary { display: inline-flex; align-items: center; padding: 0 16px; min-he
 .payroll-table tr.line-error td,
 .payment-row.line-error { background: #fbefe9; }
 #batch-confirm, #batch-register { margin-top: 14px; }
+
+/* Agent */
+.home-agent { margin: 0 0 16px; }
+.agent-list { display: grid; gap: 12px; }
+.agent-card { border: 1px solid #dfe7e1; border-radius: 10px; padding: 14px 16px; background: #fff; }
+.agent-card p { margin: 0 0 8px; }
+.agent-reason { font-weight: 600; overflow-wrap: anywhere; }
+.agent-card code, #ag-pay-url { overflow-wrap: anywhere; word-break: break-all; }
+.sign-step { margin-top: 16px; border: 1px solid #cfd9d1; border-radius: 10px; padding: 14px 16px; background: #f7faf7; }
+.sign-message { white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-all; font-size: 12px; background: #fff; border: 1px solid #dfe7e1; border-radius: 8px; padding: 12px; }
+#ag-rules-form fieldset, #ag-wl-form { border: 0; padding: 0; margin: 0 0 18px; }
+#ag-rules-form legend { font-weight: 700; margin-bottom: 8px; }
+.table-scroll { overflow-x: auto; max-width: 100%; }
+.ag-caps { width: 100%; border-collapse: collapse; }
+.ag-caps th, .ag-caps td { text-align: left; padding: 4px 6px; font-size: 13px; }
+.ag-caps input { width: 100%; min-width: 90px; }
+.sign-warning { color: #9a3b1f; background: #fbefe9; border: 1px solid #e6b9a8; border-radius: 8px; padding: 8px 12px; margin: 8px 0; font-size: 13px; font-weight: 600; }
+.sign-warning p { margin: 0; }

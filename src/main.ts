@@ -1,6 +1,7 @@
 import "./style.css";
 import { escapeHTML as esc } from "../shared/text.ts";
 import { api, ApiError } from "./api.ts";
+import { mountAgent } from "./views/agent.ts";
 import { mountBill } from "./views/bill-detail.ts";
 import { mountBills, mountNewBill } from "./views/bills.ts";
 import { mountHome } from "./views/home.ts";
@@ -34,6 +35,7 @@ const ROUTES: { pattern: RegExp; name: string; keys: string[]; public?: boolean;
   { pattern: /^\/payroll\/([^/]+)\/?$/, name: "payroll-batch", keys: ["id"], nav: "payroll", title: "Payout" },
   { pattern: /^\/swap\/?$/, name: "swap", keys: [], nav: "swap", title: "Swap" },
   { pattern: /^\/withdraw\/?$/, name: "withdraw", keys: [], nav: "withdraw", title: "Withdraw" },
+  { pattern: /^\/agent\/?$/, name: "agent", keys: [], nav: "agent", title: "Agent" },
   { pattern: /^\/pay\/([^/]+)\/?$/, name: "pay", keys: ["publicId"], public: true, nav: "", title: "Pay invoice" },
 ];
 
@@ -65,10 +67,11 @@ registerView("payroll", mountPayroll);
 registerView("payroll-batch", mountPayrollBatch);
 registerView("swap", mountSwap);
 registerView("withdraw", mountWithdraw);
+registerView("agent", mountAgent);
 registerView("pay", mountPay);
 
 // Desktop sidebar lists every entry. The mobile bottom bar shows the primary ones plus "More",
-// which opens the rest (Payroll, Withdraw) and Sign out.
+// which opens the rest (Payroll, Withdraw, Agent) and Sign out.
 const NAV: [string, string, string, string][] = [
   ["home", "#/", "◫", "Home"],
   ["invoices", "#/invoices", "▤", "Invoices"],
@@ -76,6 +79,7 @@ const NAV: [string, string, string, string][] = [
   ["swap", "#/swap", "⇄", "Swap"],
   ["payroll", "#/payroll", "☰", "Payroll"],
   ["withdraw", "#/withdraw", "↗", "Withdraw"],
+  ["agent", "#/agent", "✦", "Agent"],
 ];
 const MOBILE_PRIMARY = new Set(["home", "invoices", "bills", "swap"]);
 

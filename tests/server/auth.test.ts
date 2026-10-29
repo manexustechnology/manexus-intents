@@ -49,7 +49,7 @@ test("challenge shape", async () => {
   assert.equal(near.message, "Sign in to Manexus Intents");
   assert.notEqual(near.nonce, evm.nonce);
   const row = await db.prepare("SELECT * FROM challenges WHERE nonce = ?").bind(near.nonce).first<Record<string, unknown>>();
-  assert.deepEqual({ ...row }, { nonce: near.nonce, account: "alice.near", kind: "near", expires_at: NOW + 5 * MIN, used: 0 });
+  assert.deepEqual({ ...row }, { nonce: near.nonce, account: "alice.near", kind: "near", expires_at: NOW + 5 * MIN, used: 0, purpose: "login" });
 });
 
 test("challenge rejects invalid accounts and kinds", async () => {
@@ -152,4 +152,11 @@ test("nep413Hash matches the near-api-js reference vector", () => {
   const withCb = nep413Hash({ message: "hi", nonce: new Uint8Array(32).fill(1), recipient: "r", callbackUrl: "u" });
   assert.notEqual(Buffer.from(withCb).toString("hex"), Buffer.from(hash).toString("hex"));
   assert.throws(() => nep413Hash({ message: "hi", nonce: new Uint8Array(31), recipient: "r" }));
+});
+
+test("NEAR: an RPC failure during the full-access check is 503, not 500 (and the nonce stays used)", async () => {
+  const { db, body } = await nearLogin();
+  const down: NearRpc = { async viewAccessKey() { throw new Error("timeout"); }, async viewFunction() { throw new Error("not used"); } };
+  await assert.rejects(verifyLogin(db, down, body, NOW + MIN), (e) => e instanceof HttpError && e.status === 503 && e.message === "NEAR RPC is unavailable, try again");
+  await rejects401(verifyLogin(db, fakeRpc("FullAccess"), body, NOW + MIN));
 });

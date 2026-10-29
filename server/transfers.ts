@@ -11,6 +11,7 @@ import type { Db } from "./db.ts";
 import { HttpError } from "./http.ts";
 import type { NearRpc } from "./near-rpc.ts";
 import type { OneClickToken, Quote, QuoteRequest, SwapStatus, createOneClick } from "./oneclick.ts";
+import { enforceLimits } from "./policy.ts";
 
 type User = { account: string; kind: "near" | "evm" };
 type Standard = "nep413" | "erc191";
@@ -265,6 +266,11 @@ async function checkRequest(deps: TransferDeps, user: User, input: TransferReque
     .first<{ n: number }>();
   if ((open?.n ?? 0) >= MAX_OPEN_QUOTES_PER_HOUR) throw new HttpError(429, `Too many ${NOUN[kind]} quotes. Try again later.`);
 
+  // Spending limits (server/policy.ts). EXACT_INPUT: the amount that leaves is known now. EXACT_OUTPUT: it is
+  // the quote's amountIn, checked again in prepareChecked; here 0n still checks the whitelist and refuses
+  // when the 24 h cap is already used up, before asking 1Click.
+  await enforceLimits(deps, user, { kind, originAsset: held.tokenId, destinationAsset: dest.assetId, recipientType, recipient, billId: billId ?? undefined }, swapType === "EXACT_INPUT" ? BigInt(amount) : 0n);
+
   const request: QuoteRequest = {
     dry: false,
     swapType,
@@ -306,6 +312,7 @@ async function prepareChecked(deps: TransferDeps, user: User, c: Checked, q: Quo
     // The recipient must never receive less than the bill/payroll amount, even at the slippage floor.
     if (BigInt(q.minAmountOut) < BigInt(c.amount)) throw new HttpError(502, "NEAR Intents returned an unexpected response");
     sent = q.amountIn;
+    await enforceLimits(deps, user, { kind: c.kind, originAsset: c.held.tokenId, destinationAsset: c.dest.assetId, recipientType: c.recipientType, recipient: c.recipient, billId: c.billId ?? undefined }, BigInt(sent));
   }
 
   const standard: Standard = user.kind === "near" ? "nep413" : "erc191";
@@ -425,6 +432,18 @@ export async function submitTransfer(deps: TransferDeps, user: User, body: { dep
     if (b && b.source === "manexus" && b.invoice_status !== "issued") throw new HttpError(409, "The vendor invoice is no longer payable");
   }
 
+  // Spending limits again, against what is committed now. Two quotes taken in parallel can each pass the
+  // quote-time 24 h check (neither saw the other's row); here only transfers already relayed (or in flight)
+  // count (plus unsigned quotes whose relay was attempted), not other unsigned quotes, so the first one signed
+  // wins and the next is refused. Two submits running concurrently between this read and the claim are caught
+  // by the recount after the claim. The policy and whitelist are also re-read, so a tightened cap or a removed
+  // whitelist entry blocks an older quote.
+  const limitReq = {
+    kind: row.kind, originAsset: row.origin_asset, destinationAsset: row.destination_asset,
+    recipientType: s.meta.recipientType ?? ("DESTINATION_CHAIN" as const), recipient: row.recipient, billId: row.bill_id ?? undefined,
+  };
+  await enforceLimits(deps, user, limitReq, BigInt(row.amount), { committedOnly: true, exclude: row.deposit_address });
+
   // See the updated_at INVARIANT above unsignedForGood: `ts` is checked-unexpired, so these writes stay <= deadline.
   const ts = now.toISOString();
   const claim = await db
@@ -432,6 +451,19 @@ export async function submitTransfer(deps: TransferDeps, user: User, body: { dep
     .bind(ts, row.deposit_address, user.account)
     .run();
   if (claim.meta.changes !== 1) throw new HttpError(409, `This ${noun} was already submitted`);
+  // Recount with this row now PROCESSING (so counted once, amount 0n): a concurrent submit that claimed in the
+  // meantime is visible now. Over the cap → undo the claim (nothing was relayed; upstream left as it was, so a
+  // refused row is not mistaken for an attempted relay) and refuse. Truly simultaneous submits may both be
+  // refused; neither moves funds and the owner can sign again.
+  try {
+    await enforceLimits(deps, user, limitReq, 0n, { committedOnly: true, dailyOnly: true });
+  } catch (e) {
+    await db
+      .prepare("UPDATE withdrawals SET status = 'AWAITING_SIGNATURE', updated_at = ? WHERE deposit_address = ? AND owner = ? AND status = 'PROCESSING' AND intent_hash IS NULL")
+      .bind(ts, row.deposit_address, user.account)
+      .run();
+    throw e;
+  }
 
   let intentHash: string;
   try {
@@ -505,7 +537,9 @@ export async function refreshTransfer(deps: TransferDeps, user: User, depositAdd
  * `refreshTransfer` for a row the caller already loaded (owner-scoped): at most one query, and the row as
  * stored afterwards. A failed check records `checkedAttemptAt` in upstream and leaves updated_at alone.
  */
-export async function refreshRow(deps: TransferDeps, user: User, row: TransferRow): Promise<{ view: TransferView; row: TransferRow }> {
+export async function refreshRow(
+  deps: { db: Db; oneclick: Pick<OneClick, "status">; now: Date }, user: User, row: TransferRow,
+): Promise<{ view: TransferView; row: TransferRow }> {
   const { db, oneclick, now } = deps;
   if (row.owner !== user.account) throw new HttpError(404, "Transfer not found");
   if (!stale(row, now)) return { view: toView(row, now), row };
@@ -560,7 +594,7 @@ export async function refreshRow(deps: TransferDeps, user: User, row: TransferRo
 }
 
 // INVARIANT (updated_at): only a successful upstream read (refreshTransfer after oneclick.status) may write
-// updated_at with a time after the quote deadline. Every other writer — the INSERT at quote time and the three
+// updated_at with a time after the quote deadline. Every other writer — the INSERT at quote time and the four
 // submitTransfer updates, which all stamp `ts` taken after the "unexpired" check — writes a time at or before the
 // deadline. unsignedForGood relies on this: an updated_at past deadline + SUBMIT_GRACE_MS proves 1Click was
 // asked after the grace period and still had not seen the transfer. Bill and payroll re-quotes (double-pay
