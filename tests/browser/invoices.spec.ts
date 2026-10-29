@@ -120,6 +120,15 @@ test("owner sees a mismatched payment as Needs review with the received amount",
   await expect(page.locator(".heading .badge.status-issued")).toBeVisible();
 });
 
+test("owner sees a mismatch with no received amount as not received by their account", async ({ page }) => {
+  await mockApi(page, [attempt({ outcome: "mismatch" })]);
+  await createAndIssue(page);
+  const row = page.locator('#invoice-payments [data-deposit="dep1"]');
+  await expect(row.locator(".badge")).toHaveText("Needs review");
+  await expect(row).toContainText("Not received by your account — needs review");
+  await expect(row).not.toContainText(/Received \d/);
+});
+
 test("the invoice list says payment status updates when an invoice is opened", async ({ page }) => {
   await mockApi(page);
   await page.goto("/#/invoices");

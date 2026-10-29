@@ -145,6 +145,26 @@ test("SUCCESS to attacker.near → mismatch, invoice stays issued", async () => 
   assert.equal((await byAddr(db, inv.id)).dep1.outcome, "mismatch");
 });
 
+test("mismatch not delivered to the owner's account records no amountOut and clears a stored one", async () => {
+  const db = createTestDb();
+  const inv = await issueInvoice(db, OWNER, (await createInvoice(db, OWNER, draft, T0)).id, T0);
+  await saveAttempt(db, attempt(inv.id, "dep1", { status: "PROCESSING", amountOut: "500000" }));
+  const f = fakeOneClick({ dep1: swap("SUCCESS", {}, { recipient: "attacker.near" }) });
+  await refreshInvoice({ db, oneclick: f.oneclick, now: NOW }, inv.id);
+  const a = (await byAddr(db, inv.id)).dep1;
+  assert.equal(a.outcome, "mismatch");
+  assert.equal(a.amountOut, undefined);
+  assert.deepEqual(decideOutcome(INV, ATT, swap("SUCCESS", {}, { recipientType: "DESTINATION_CHAIN" })), { status: "SUCCESS", outcome: "mismatch" });
+  assert.deepEqual(decideOutcome(INV, ATT, swap("SUCCESS", {}, { destinationAsset: ARB })), { status: "SUCCESS", outcome: "mismatch" });
+  assert.deepEqual(decideOutcome(INV, ATT, swap("SUCCESS", { depositAddress: "other" })), { status: "SUCCESS", outcome: "mismatch" });
+  assert.deepEqual(decideOutcome(INV, { ...ATT, invoiceId: "other" }, swap("SUCCESS")), { status: "SUCCESS", outcome: "mismatch" });
+});
+
+test("mismatch delivered to the owner (amount short, other swapType) keeps amountOut", () => {
+  assert.deepEqual(decideOutcome(INV, ATT, swap("SUCCESS", { amountOut: "699999" })), { status: "SUCCESS", outcome: "mismatch", amountOut: "699999" });
+  assert.deepEqual(decideOutcome(INV, ATT, swap("SUCCESS", {}, { swapType: "EXACT_INPUT" })), { status: "SUCCESS", outcome: "mismatch", amountOut: "700000" });
+});
+
 test("SUCCESS without amountOut → status recorded, no outcome; a later complete status pays", async () => {
   const { db, inv, deps, statuses, calls } = await setup({ dep1: swap("SUCCESS", { amountOut: undefined }) });
   await refreshInvoice(deps, inv.id);

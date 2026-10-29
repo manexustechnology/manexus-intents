@@ -26,18 +26,21 @@ export function decideOutcome(invoice: InvoiceRow, attempt: AttemptRow, s: SwapS
 
   const q = s.quoteRequest;
   if (!q || typeof s.amountOut !== "string" || !DIGITS.test(s.amountOut)) return base;
-  const matches =
+  // Funds reached the owner's account in the invoice token; only then is amountOut a meaningful "received" amount.
+  const toOwner =
     attempt.invoiceId === invoice.id &&
     (s.depositAddress === undefined || s.depositAddress === attempt.depositAddress) &&
-    q.swapType === "EXACT_OUTPUT" &&
     q.recipient === invoice.owner &&
     q.recipientType === "INTENTS" &&
-    q.destinationAsset === invoice.tokenId &&
+    q.destinationAsset === invoice.tokenId;
+  const matches =
+    toOwner &&
+    q.swapType === "EXACT_OUTPUT" &&
     q.amount === invoice.total &&
     DIGITS.test(invoice.total) &&
     BigInt(invoice.total) > 0n &&
     BigInt(s.amountOut) >= BigInt(invoice.total);
-  if (!matches) return { ...base, outcome: "mismatch" };
+  if (!matches) return toOwner ? { ...base, outcome: "mismatch" } : { status: s.status, outcome: "mismatch" };
   if (invoice.status === "issued") return { ...base, outcome: "paid" };
   if (invoice.status === "paid") return { ...base, outcome: invoice.paidBy === attempt.depositAddress ? "paid" : "duplicate" };
   if (invoice.status === "cancelled") return { ...base, outcome: "after_cancel" };
@@ -114,7 +117,7 @@ export async function refreshInvoice(deps: ReconcileDeps, invoiceId: string): Pr
     // Never overwrite an outcome another refresh already recorded.
     await db
       .prepare("UPDATE payment_attempts SET status=?, outcome=?, amount_out=?, upstream=?, updated_at=? WHERE deposit_address=? AND outcome IS NULL")
-      .bind(d.status, d.outcome ?? null, d.amountOut ?? a.amountOut ?? null, trimmed(s), at, a.depositAddress)
+      .bind(d.status, d.outcome ?? null, d.outcome === "mismatch" && d.amountOut === undefined ? null : (d.amountOut ?? a.amountOut ?? null), trimmed(s), at, a.depositAddress)
       .run();
   }
   if (firstError !== undefined) throw firstError;

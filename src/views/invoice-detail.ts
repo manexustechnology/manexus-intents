@@ -26,7 +26,11 @@ export function paymentsHtml(p: Payments, symbol: string): string {
     const sent = a.amountInFormatted ? `${esc(a.amountInFormatted)} ${esc(a.symbol)} on ${esc(a.blockchain)}` : "Amount unavailable";
     const extra = a.outcome === "duplicate" || a.outcome === "after_cancel" ? `<p class="fine">Extra payment received (in your balance)</p>` : "";
     return `<div class="payment-row" data-deposit="${esc(a.depositAddress)}"><div>${badge} <strong>${sent}</strong> <span class="muted">${esc(a.createdAt.slice(0, 16).replace("T", " "))} UTC</span></div>${extra}${
-      a.amountOutFormatted && RECEIVED.has(a.outcome ?? "") ? `<p class="fine">Received ${esc(a.amountOutFormatted)} ${esc(symbol)}</p>` : ""
+      a.amountOutFormatted && RECEIVED.has(a.outcome ?? "")
+        ? `<p class="fine">Received ${esc(a.amountOutFormatted)} ${esc(symbol)}</p>`
+        : a.outcome === "mismatch"
+          ? `<p class="fine">Not received by your account — needs review</p>`
+          : ""
     }${a.destinationTxHashes.length ? `<p class="fine">Settlement: ${txLinks(a.destinationTxHashes)}</p>` : ""}${
       a.originTxHashes.length ? `<p class="fine">Deposit tx: ${a.originTxHashes.map((h) => `<code>${esc(h)}</code>`).join(" ")}</p>` : ""
     }</div>`;
