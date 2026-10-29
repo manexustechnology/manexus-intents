@@ -3,6 +3,7 @@ import { escapeHTML as esc } from "../../shared/text.ts";
 import { baseUnits } from "../../shared/units.ts";
 import { api, postJson } from "../api.ts";
 import { registerKey, signAndSubmit } from "../sign-flow.ts";
+import { countdown, msg } from "./transfer-ui.ts";
 import { NEAR_WALLETS, walletConnected, type NearWalletId, type Session } from "../wallet/index.ts";
 
 type Balance = { tokenId: string; symbol: string; blockchain: string; decimals: number; amount: string; formatted: string };
@@ -54,12 +55,6 @@ const STATUS_TEXT: Record<string, string> = {
 const TERMINAL = new Set(["SUCCESS", "REFUNDED", "FAILED"]);
 const POLL_MS = 5_000;
 const tokenLabel = (t: { symbol: string; blockchain: string }) => `${t.symbol} · ${chainName(t.blockchain)}`;
-const msg = (e: unknown) => (e instanceof Error ? e.message : "Something went wrong.");
-
-function countdown(deadline: string, now = Date.now()): string {
-  const s = Math.max(0, Math.floor((new Date(deadline).getTime() - now) / 1000));
-  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
-}
 
 type Step =
   | { kind: "form" }

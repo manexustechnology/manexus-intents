@@ -6,6 +6,7 @@ import { mountInvoice } from "./views/invoice-detail.ts";
 import { mountInvoices } from "./views/invoices.ts";
 import { mountPay } from "./views/pay.ts";
 import { mountLogin } from "./views/login.ts";
+import { mountSwap } from "./views/swap.ts";
 import { mountWithdraw } from "./views/withdraw.ts";
 import { disconnectWallet, type Session } from "./wallet/index.ts";
 
@@ -22,6 +23,7 @@ const ROUTES: { pattern: RegExp; name: string; keys: string[]; public?: boolean;
   { pattern: /^\/?$/, name: "home", keys: [], nav: "home", title: "Home" },
   { pattern: /^\/invoices\/?$/, name: "invoices", keys: [], nav: "invoices", title: "Invoices" },
   { pattern: /^\/invoices\/([^/]+)\/?$/, name: "invoice", keys: ["id"], nav: "invoices", title: "Invoice" },
+  { pattern: /^\/swap\/?$/, name: "swap", keys: [], nav: "swap", title: "Swap" },
   { pattern: /^\/withdraw\/?$/, name: "withdraw", keys: [], nav: "withdraw", title: "Withdraw" },
   { pattern: /^\/pay\/([^/]+)\/?$/, name: "pay", keys: ["publicId"], public: true, nav: "", title: "Pay invoice" },
 ];
@@ -47,12 +49,14 @@ export function parseRoute(hash: string): Route | null {
 registerView("home", mountHome);
 registerView("invoices", mountInvoices);
 registerView("invoice", mountInvoice);
+registerView("swap", mountSwap);
 registerView("withdraw", mountWithdraw);
 registerView("pay", mountPay);
 
 const NAV: [string, string, string, string][] = [
   ["home", "#/", "◫", "Home"],
   ["invoices", "#/invoices", "▤", "Invoices"],
+  ["swap", "#/swap", "⇄", "Swap"],
   ["withdraw", "#/withdraw", "↗", "Withdraw"],
 ];
 
