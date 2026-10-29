@@ -51,6 +51,8 @@ type OneClick = Pick<ReturnType<typeof createOneClick>, "status" | "tokens">;
 export type ReconcileDeps = { db: Db; oneclick: OneClick; now: Date };
 
 const THROTTLE_MS = 5_000;
+/** Attempts asked about per refresh (D1 caps queries per request; each costs about 3). The rest go next time. */
+const REFRESH_PER_CALL = 10;
 const EXPIRED_GRACE_MS = 24 * 3_600_000;
 
 async function loadInvoice(db: Db, id: string): Promise<InvoiceRow> {
@@ -80,17 +82,22 @@ function needsRefresh(a: AttemptRow, now: Date): boolean {
 }
 
 /**
- * Lazily reconcile every open attempt of an invoice against 1Click. Attempts are processed oldest first;
- * the guarded UPDATE (status='issued') picks a single winner even across concurrent refreshes.
+ * Lazily reconcile the open attempts of an invoice against 1Click: the REFRESH_PER_CALL least recently
+ * updated ones, processed oldest-created first; the guarded UPDATE (status='issued') picks a single winner
+ * even across concurrent refreshes.
  * An upstream error leaves that attempt untouched; remaining attempts are still processed, then the
  * first error is rethrown.
  */
 export async function refreshInvoice(deps: ReconcileDeps, invoiceId: string): Promise<void> {
   const { db, oneclick, now } = deps;
   const at = now.toISOString();
+  const byCreated = (x: AttemptRow, y: AttemptRow) =>
+    x.createdAt < y.createdAt ? -1 : x.createdAt > y.createdAt ? 1 : x.depositAddress < y.depositAddress ? -1 : 1;
   const open = (await listAttempts(db, invoiceId))
     .filter((a) => needsRefresh(a, now))
-    .sort((x, y) => (x.createdAt < y.createdAt ? -1 : x.createdAt > y.createdAt ? 1 : x.depositAddress < y.depositAddress ? -1 : 1));
+    .sort((x, y) => (x.updatedAt < y.updatedAt ? -1 : x.updatedAt > y.updatedAt ? 1 : byCreated(x, y)))
+    .slice(0, REFRESH_PER_CALL)
+    .sort(byCreated);
   let firstError: unknown;
   for (const a of open) {
     let s: SwapStatus;

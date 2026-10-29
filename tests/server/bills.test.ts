@@ -6,7 +6,7 @@ import type { Db } from "../../server/db.ts";
 import type { NearRpc } from "../../server/near-rpc.ts";
 import type { OneClickToken, Quote, QuoteRequest, SwapStatus } from "../../server/oneclick.ts";
 import { cancelInvoice, createInvoice, getInvoice, issueInvoice } from "../../server/invoices.ts";
-import { listAttempts } from "../../server/payments.ts";
+import { listAttempts, saveAttempt } from "../../server/payments.ts";
 import { submitTransfer, type TransferDeps } from "../../server/transfers.ts";
 import {
   cancelBill,
@@ -510,4 +510,29 @@ test("a paying bill with an unsigned, unexpired quote exposes that intent to its
   assert.deepEqual(v.pendingQuote, { depositAddress: qt.depositAddress, deadline: qt.deadline, amountOutFormatted: qt.amountOutFormatted, intent: qt.intent, transfer: v.transfer });
   const expired = await refreshBill(deps(db, f, new Date("2030-01-01T00:10:30.000Z")), ALICE, b.id);
   assert.equal(expired.pendingQuote, undefined);
+});
+
+test("refreshBill on a busy vendor invoice stays within D1's query budget (refreshInvoice checks at most 10 attempts)", async () => {
+  const db = createTestDb();
+  const f = fakes();
+  const { inv, b } = await manexusBill(db, f);
+  const qt = await quoteBillPayment(deps(db, f), ALICE, b.id, { originAsset: USDC });
+  await submitTransfer(deps(db, f), ALICE, signed(qt));
+  f.settle(qt.depositAddress, "PROCESSING");
+  // 30 other payers' attempts still open on the same vendor invoice.
+  const others = Array.from({ length: 30 }, (_, k) => `other${k}`);
+  for (const d of others)
+    await saveAttempt(db, { depositAddress: d, invoiceId: inv.id, originAsset: USDC, amountIn: "1010000", refundTo: "x.near", deadline: "2030-01-01T00:30:00.000Z", status: "PROCESSING", createdAt: NOW.toISOString(), updatedAt: NOW.toISOString() });
+  const asked: string[] = [];
+  const real = f.oneclick.status;
+  f.oneclick.status = async (d: string) => {
+    asked.push(d);
+    return others.includes(d) ? { status: "PROCESSING", updatedAt: "t", originTxHashes: [], destinationTxHashes: [] } : real(d);
+  };
+  db.queries = 0;
+  const v = await refreshBill(deps(db, f, LATER), ALICE, b.id);
+  console.log(`refreshBill, 31 open vendor attempts: ${db.queries} queries`);
+  assert.ok(db.queries <= 45, `${db.queries} queries`);
+  assert.equal(v.status, "paying");
+  assert.equal(asked.length, 1 + 10);
 });
