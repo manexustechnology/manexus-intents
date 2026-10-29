@@ -147,3 +147,18 @@ test("server rejection is shown and nothing is signed", async ({ page }) => {
   const eth = await page.evaluate(() => (window as unknown as { __eth: unknown[] }).__eth);
   expect(eth).toEqual([]);
 });
+
+test("after a submit error the review asks for confirmation again", async ({ page }) => {
+  await setup(page);
+  await page.route("**/api/withdrawals/submit", (r) => r.fulfill({ status: 502, json: { error: "NEAR Intents: boom" } }));
+  await fillForm(page);
+  await page.locator("#wd-amount").fill("1.5");
+  await page.locator("#wd-recipient").fill(DEST);
+  await page.getByRole("button", { name: "Review withdrawal" }).click();
+  const box = page.getByLabel("I confirm this address is on Arbitrum (arb)");
+  await box.check();
+  await page.getByRole("button", { name: "Sign in wallet" }).click();
+  await expect(page.locator("#wd-review")).toContainText("NEAR Intents: boom");
+  await expect(box).not.toBeChecked();
+  await expect(page.getByRole("button", { name: "Sign in wallet" })).toBeDisabled();
+});

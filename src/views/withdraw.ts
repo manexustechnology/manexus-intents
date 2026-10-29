@@ -357,7 +357,8 @@ ${TERMINAL.has(w.status) ? `<button class="primary" type="button" id="wd-new">Ne
       if (!alive) return;
       busy = "";
       error = msg(e);
-      step = { kind: "review", quote, confirmed: true };
+      // Back to review; the user re-confirms the address before signing again.
+      step = { kind: "review", quote, confirmed: false };
       draw();
     }
   }
