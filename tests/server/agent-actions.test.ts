@@ -256,7 +256,11 @@ test("runAgent settles executing proposals: SUCCESS → done, REFUNDED → propo
 
   await runAgent(w.deps(at(60_000)), ALICE);
   assert.equal((await status(w.db, a.id)).status, "done");
-  assert.equal((await status(w.db, b.id)).status, "proposed");
+  assert.deepEqual(await status(w.db, b.id), { status: "proposed", deposit_address: null }, "old transfer unlinked");
+  // Approving it again links and returns the new quote.
+  const qb2 = (await approveProposal(w.deps(at(61_000)), ALICE, b.id, {})) as TransferQuote;
+  assert.notEqual(qb2.depositAddress, qb.depositAddress);
+  assert.deepEqual(await status(w.db, b.id), { status: "executing", deposit_address: qb2.depositAddress });
   assert.equal((await status(w.db, c.id)).status, "executing", "unsigned quote not yet expired");
   // The unsigned quote expires (10 min) and was never relayed: the proposal is open again.
   await runAgent(w.deps(at(11 * 60_000)), ALICE);
@@ -366,4 +370,21 @@ test("pay_bill approve without a string originAsset is 400 and the proposal stay
   await rejectsWith(approveProposal(w.deps(), ALICE, p.id, { originAsset: 5 as unknown as string }), 400, "Choose a token from your balance.");
   assert.equal((await status(w.db, p.id)).status, "proposed");
   assert.equal(w.calls.quote.length, 0);
+});
+
+test("the stuck release never releases a row an approve linked after runAgent read it", async () => {
+  const w = world({ [USDT]: "120000000" });
+  await setPolicy(w.db, ALICE.account, CONVERT);
+  const p = byType(await runAgent(w.deps(), ALICE), "convert");
+  await w.db.prepare("UPDATE agent_proposals SET status = 'executing', updated_at = ? WHERE id = ?").bind(NOW.toISOString(), p.id).run();
+  // Between settle's read and its write batch, the (slow) approve links its quote.
+  const raced: Db = {
+    prepare: (sql: string) => w.db.prepare(sql),
+    batch: async (stmts) => {
+      await w.db.prepare("UPDATE agent_proposals SET deposit_address = 'A-dep', updated_at = ? WHERE id = ?").bind(at(STUCK_APPROVE_MS).toISOString(), p.id).run();
+      return w.db.batch(stmts);
+    },
+  };
+  await runAgent({ ...w.deps(at(STUCK_APPROVE_MS + 1000)), db: raced }, ALICE);
+  assert.deepEqual(await status(w.db, p.id), { status: "executing", deposit_address: "A-dep" });
 });

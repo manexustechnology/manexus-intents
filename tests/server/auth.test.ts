@@ -153,3 +153,10 @@ test("nep413Hash matches the near-api-js reference vector", () => {
   assert.notEqual(Buffer.from(withCb).toString("hex"), Buffer.from(hash).toString("hex"));
   assert.throws(() => nep413Hash({ message: "hi", nonce: new Uint8Array(31), recipient: "r" }));
 });
+
+test("NEAR: an RPC failure during the full-access check is 503, not 500 (and the nonce stays used)", async () => {
+  const { db, body } = await nearLogin();
+  const down: NearRpc = { async viewAccessKey() { throw new Error("timeout"); }, async viewFunction() { throw new Error("not used"); } };
+  await assert.rejects(verifyLogin(db, down, body, NOW + MIN), (e) => e instanceof HttpError && e.status === 503 && e.message === "NEAR RPC is unavailable, try again");
+  await rejects401(verifyLogin(db, fakeRpc("FullAccess"), body, NOW + MIN));
+});

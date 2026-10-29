@@ -193,16 +193,27 @@ async function settleExecuting(deps: AgentDeps, user: User): Promise<void> {
     .all<ExecRow>();
   if (!results.length) return;
   const ts = now.toISOString();
-  const set = (id: string, status: "done" | "proposed") =>
-    db.prepare("UPDATE agent_proposals SET status = ?, updated_at = ? WHERE id = ? AND owner = ? AND status = 'executing'").bind(status, ts, id, owner);
+  // Every write is guarded on exactly what was read, so a concurrent approve that linked or re-claimed the row wins.
+  // Linked: SUCCESS → done (address kept); a failed or unsigned-for-good transfer → proposed with the address
+  // cleared, so the next approval can link its own quote.
+  const linked = (id: string, dep: string, status: "done" | "proposed") =>
+    db
+      .prepare(`UPDATE agent_proposals SET status = ?, updated_at = ?${status === "proposed" ? ", deposit_address = NULL" : ""} WHERE id = ? AND owner = ? AND status = 'executing' AND deposit_address = ?`)
+      .bind(status, ts, id, owner, dep);
+  // Never linked and stuck: release only the claim that was read (same updated_at, still no address).
+  const unstick = (id: string, claimedAt: string) =>
+    db
+      .prepare("UPDATE agent_proposals SET status = 'proposed', updated_at = ? WHERE id = ? AND owner = ? AND status = 'executing' AND deposit_address IS NULL AND updated_at = ?")
+      .bind(ts, id, owner, claimedAt);
   const stmts = [];
   let refreshed = 0;
   for (const r of results) {
     if (!r.p_dep) {
-      if (now.getTime() - Date.parse(r.p_updated_at) > STUCK_APPROVE_MS) stmts.push(set(r.p_id, "proposed"));
+      if (now.getTime() - Date.parse(r.p_updated_at) > STUCK_APPROVE_MS) stmts.push(unstick(r.p_id, r.p_updated_at));
       continue;
     }
-    if (!r.deposit_address) { stmts.push(set(r.p_id, "proposed")); continue; }
+    const dep = r.p_dep;
+    if (!r.deposit_address) { stmts.push(linked(r.p_id, dep, "proposed")); continue; }
     const { p_id: _i, p_updated_at: _u, p_dep: _d, ...rest } = r;
     let row = rest as TransferRow;
     let t;
@@ -217,8 +228,8 @@ async function settleExecuting(deps: AgentDeps, user: User): Promise<void> {
     } catch {
       continue; // unreadable row: leave it executing
     }
-    if (t.status === "SUCCESS") stmts.push(set(r.p_id, "done"));
-    else if (t.status === "FAILED" || t.status === "REFUNDED" || unsignedForGoodRow(row, t, now)) stmts.push(set(r.p_id, "proposed"));
+    if (t.status === "SUCCESS") stmts.push(linked(r.p_id, dep, "done"));
+    else if (t.status === "FAILED" || t.status === "REFUNDED" || unsignedForGoodRow(row, t, now)) stmts.push(linked(r.p_id, dep, "proposed"));
   }
   if (stmts.length) await db.batch(stmts);
 }

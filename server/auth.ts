@@ -87,7 +87,7 @@ export type SignedMessage = { kind: unknown; account: string; nonce: unknown; si
  * purpose), then verify the signature over `message`: ERC-191 by `account`, or NEP-413
  * `{message, nonce (the challenge's 32 bytes), recipient: "manexus-intents"}` by a full-access key of
  * `account`. `account` must already be normalized. Returns false on any failure; the challenge is spent
- * even when the signature is bad.
+ * even when the signature is bad. An RPC failure during the NEAR full-access check throws 503 (challenge still spent).
  */
 export async function verifySignedMessage(db: Db, rpc: NearRpc, m: SignedMessage, now = Date.now()): Promise<boolean> {
   const { kind, account, nonce, signature, publicKey, message, purpose } = m;
@@ -112,7 +112,13 @@ export async function verifySignedMessage(db: Db, rpc: NearRpc, m: SignedMessage
   if (!pk || pk.length !== 32 || !sig || sig.length !== 64 || !nonceBytes || nonceBytes.length !== 32) return false;
   const hash = nep413Hash({ message, nonce: nonceBytes, recipient: RECIPIENT, callbackUrl: null });
   if (!decodeOrNull(() => ed25519.verify(sig, hash, pk))) return false;
-  const key = await rpc.viewAccessKey(account, "ed25519:" + base58.encode(pk));
+  let key: Awaited<ReturnType<NearRpc["viewAccessKey"]>>;
+  try {
+    key = await rpc.viewAccessKey(account, "ed25519:" + base58.encode(pk));
+  } catch {
+    // RPC error or timeout: not a bad signature. The challenge stays consumed; the owner signs a fresh one.
+    throw new HttpError(503, "NEAR RPC is unavailable, try again");
+  }
   return !!key && key.permission === "FullAccess";
 }
 
