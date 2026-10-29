@@ -30,6 +30,10 @@ export async function signErc191(message: string): Promise<string> {
   return sig;
 }
 
+export function evmConnectedAccount(): string | null {
+  return current;
+}
+
 export function disconnectEvm(): void {
   current = null;
 }

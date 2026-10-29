@@ -60,3 +60,35 @@ export async function disconnectNear(): Promise<void> {
     /* best effort */
   }
 }
+
+/** The connected account's public key as reported by the wallet, if it reports one. */
+export async function nearPublicKey(): Promise<string | null> {
+  if (!current) return null;
+  try {
+    const wallet = await (await selector()).wallet<InjectedWallet>(current.walletId);
+    const acc = (await wallet.getAccounts()).find((a) => a.accountId === current?.accountId);
+    return typeof acc?.publicKey === "string" && acc.publicKey ? acc.publicKey : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * One-time registration so intents.near accepts this key's NEP-413 signatures for the account:
+ * `intents.near add_public_key({public_key})`, 100 Tgas, 1 yoctoNEAR attached.
+ */
+export async function registerIntentsKey(publicKey: string): Promise<void> {
+  if (!current) throw new Error("Connect a NEAR wallet first.");
+  const sel = await selector();
+  const wallet = await sel.wallet<InjectedWallet>(current.walletId);
+  const { actionCreators } = await import("@near-wallet-selector/core");
+  await wallet.signAndSendTransaction({
+    signerId: current.accountId,
+    receiverId: "intents.near",
+    actions: [actionCreators.functionCall("add_public_key", { public_key: publicKey }, 100_000_000_000_000n, 1n)],
+  });
+}
+
+export function nearConnectedAccount(): string | null {
+  return current?.accountId ?? null;
+}

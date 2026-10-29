@@ -6,6 +6,7 @@ import { mountInvoice } from "./views/invoice-detail.ts";
 import { mountInvoices } from "./views/invoices.ts";
 import { mountPay } from "./views/pay.ts";
 import { mountLogin } from "./views/login.ts";
+import { mountWithdraw } from "./views/withdraw.ts";
 import { disconnectWallet, type Session } from "./wallet/index.ts";
 
 export type Mount = (el: HTMLElement, params: Record<string, string>) => () => void;
@@ -43,16 +44,10 @@ export function parseRoute(hash: string): Route | null {
   return null;
 }
 
-const placeholder =
-  (title: string): Mount =>
-  (el) => {
-    el.innerHTML = `<div class="heading"><div><h1>${esc(title)}</h1><p class="muted">Coming soon.</p></div></div>`;
-    return () => {};
-  };
 registerView("home", mountHome);
 registerView("invoices", mountInvoices);
 registerView("invoice", mountInvoice);
-registerView("withdraw", placeholder("Withdraw"));
+registerView("withdraw", mountWithdraw);
 registerView("pay", mountPay);
 
 const NAV: [string, string, string, string][] = [

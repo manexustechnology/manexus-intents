@@ -1,10 +1,10 @@
 import { postJson } from "../api.ts";
-import { connectEvm, disconnectEvm, signErc191 } from "./evm.ts";
-import { connectNear, disconnectNear, signNep413, type NearWalletId } from "./near.ts";
+import { connectEvm, disconnectEvm, evmConnectedAccount, signErc191 } from "./evm.ts";
+import { connectNear, disconnectNear, nearConnectedAccount, nearPublicKey, registerIntentsKey, signNep413, type NearWalletId } from "./near.ts";
 
 export type Kind = "near" | "evm";
 export type Session = { account: string; kind: Kind };
-export { signErc191, signNep413, type NearWalletId };
+export { nearPublicKey, registerIntentsKey, signErc191, signNep413, type NearWalletId };
 export { NEAR_WALLETS } from "./near.ts";
 
 export async function connectWallet(kind: Kind, nearWallet: NearWalletId = "meteor-wallet"): Promise<Session> {
@@ -30,4 +30,18 @@ export async function signIn(kind: Kind, nearWallet?: NearWalletId): Promise<Ses
 export async function disconnectWallet(): Promise<void> {
   disconnectEvm();
   await disconnectNear();
+}
+
+/** Whether the wallet for this session is connected in this page as the session's account. */
+export function walletConnected(s: Session): boolean {
+  const a = s.kind === "evm" ? evmConnectedAccount() : nearConnectedAccount();
+  return a !== null && a.toLowerCase() === s.account.toLowerCase();
+}
+
+/** Connect the session's wallet if needed and require it to be the signed-in account. */
+export async function ensureWallet(s: Session, nearWallet?: NearWalletId): Promise<void> {
+  if (walletConnected(s)) return;
+  const { account } = await connectWallet(s.kind, nearWallet);
+  if (account.toLowerCase() !== s.account.toLowerCase())
+    throw new Error(`Your wallet is connected as ${account}, but you are signed in as ${s.account}. Switch accounts in your wallet and try again.`);
 }
