@@ -162,3 +162,22 @@ test("after a submit error the review asks for confirmation again", async ({ pag
   await expect(box).not.toBeChecked();
   await expect(page.getByRole("button", { name: "Sign in wallet" })).toBeDisabled();
 });
+
+for (const [name, over, shown] of [
+  ["expired-unsubmitted", { expiredUnsubmitted: true }, true],
+  ["plain failed", {}, false],
+] as const) {
+  test(`a ${name} withdrawal ${shown ? "explains no funds moved" : "shows only Failed"}`, async ({ page }) => {
+    await setup(page);
+    await page.route("**/api/withdrawals/submit", (r) => r.fulfill({ json: withdrawal("FAILED", over) }));
+    await fillForm(page);
+    await page.locator("#wd-amount").fill("1.5");
+    await page.locator("#wd-recipient").fill(DEST);
+    await page.getByRole("button", { name: "Review withdrawal" }).click();
+    await page.getByLabel("I confirm this address is on Arbitrum (arb)").check();
+    await page.getByRole("button", { name: "Sign in wallet" }).click();
+    await expect(page.locator("#wd-track")).toContainText("Failed");
+    const note = page.getByText("Not submitted — the quote expired. No funds moved; request a new withdrawal.");
+    await expect(note).toHaveCount(shown ? 1 : 0);
+  });
+}

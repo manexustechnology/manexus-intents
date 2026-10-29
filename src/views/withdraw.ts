@@ -14,7 +14,7 @@ type Withdrawal = {
   depositAddress: string; originSymbol: string; amountFormatted: string;
   destinationSymbol: string; destinationBlockchain: string; recipient: string;
   amountOutFormatted: string; minAmountOutFormatted: string;
-  status: string; intentHash?: string; destinationTxHashes: string[]; deadline: string; expired: boolean; createdAt: string; refreshError?: string;
+  status: string; intentHash?: string; destinationTxHashes: string[]; deadline: string; expired: boolean; expiredUnsubmitted?: boolean; createdAt: string; refreshError?: string;
 };
 type Quote = { depositAddress: string; deadline: string; intent: { standard: "nep413" | "erc191"; payload: unknown }; withdrawal: Withdrawal };
 
@@ -156,7 +156,7 @@ ${needsNearWallet ? `<label>Wallet<select id="wd-wallet">${NEAR_WALLETS.map((x) 
     const text = STATUS_TEXT[w.status] ?? w.status;
     return `<section class="panel" id="wd-track"><h2>${done ? "Withdrawal sent" : esc(text)}</h2>
 <p class="muted" role="status" id="wd-status">${esc(w.amountFormatted)} ${esc(w.originSymbol)} → ${esc(w.destinationSymbol)} to <code>${esc(w.recipient)}</code> on ${esc(chain)}: ${esc(text)}.</p>
-${w.status === "FAILED" && !w.intentHash ? `<p class="fine">Not submitted — the quote expired. No funds moved; request a new withdrawal.</p>` : ""}
+${w.expiredUnsubmitted ? `<p class="fine">Not submitted — the quote expired. No funds moved; request a new withdrawal.</p>` : ""}
 ${!TERMINAL.has(w.status) ? `<p class="fine">This usually takes a few minutes. You can leave this page; the status is kept in your withdrawal history.</p>` : ""}
 ${done && w.destinationTxHashes.length ? `<p id="wd-links">${explorerLinks(w.destinationBlockchain, w.destinationTxHashes)}</p>` : ""}
 ${w.refreshError ? `<p class="error" role="alert">${esc(w.refreshError)}</p>` : ""}

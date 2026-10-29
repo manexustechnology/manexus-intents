@@ -31,7 +31,7 @@ export type WithdrawalView = {
   destinationAsset: string; destinationSymbol: string; destinationBlockchain: string; recipient: string;
   amountOut: string; amountOutFormatted: string; minAmountOut: string; minAmountOutFormatted: string;
   status: WithdrawalStatus; intentHash?: string; destinationTxHashes: string[];
-  deadline: string; expired: boolean; createdAt: string; updatedAt: string; refreshError?: string;
+  deadline: string; expired: boolean; expiredUnsubmitted?: boolean; createdAt: string; updatedAt: string; refreshError?: string;
 };
 
 export type WithdrawalQuote = {
@@ -145,6 +145,7 @@ function toView(r: Raw, now: Date): WithdrawalView {
     destinationTxHashes: hashes,
     deadline: s.deadline,
     expired: r.status === "AWAITING_SIGNATURE" && time(s.deadline) <= now.getTime(),
+    ...(r.status === "FAILED" && u.stuckSubmit === true ? { expiredUnsubmitted: true } : {}),
     createdAt: r.created_at, updatedAt: r.updated_at,
   };
 }
@@ -311,7 +312,10 @@ export async function submitWithdrawal(deps: WithdrawDeps, user: User, body: { d
     throw e instanceof HttpError ? e : new HttpError(502, msg);
   }
   await db
-    .prepare("UPDATE withdrawals SET intent_hash = ?, upstream = NULL, updated_at = ? WHERE deposit_address = ? AND owner = ?")
+    // If the stuck-submit rule already failed this row while the relay was in flight, the intent is live: track it again.
+    .prepare(
+      "UPDATE withdrawals SET intent_hash = ?, upstream = NULL, status = CASE WHEN status = 'FAILED' THEN 'PROCESSING' ELSE status END, updated_at = ? WHERE deposit_address = ? AND owner = ?",
+    )
     .bind(intentHash.slice(0, 200), ts, row.deposit_address, user.account)
     .run();
   return toView(await load(db, user, row.deposit_address), now);
@@ -348,11 +352,12 @@ export async function refreshWithdrawal(deps: WithdrawDeps, user: User, depositA
   const hold = unseen && (row.status === "AWAITING_SIGNATURE" || (row.status === "PROCESSING" && row.intent_hash == null));
   const ts = now.toISOString();
   // A submit that never finished (worker died mid-relay) would be held PROCESSING forever: once the quote is
-  // long past its deadline nothing can still be in flight, so close it out. Guarded so a late submit result wins.
+  // long past its deadline nothing should still be in flight, so close it out with an explicit marker. A submit
+  // that completes after this still records its intent hash and moves the row back to PROCESSING.
   if (hold && row.status === "PROCESSING" && now.getTime() > time(stored(row).deadline) + STUCK_SUBMIT_MS) {
     await db
       .prepare("UPDATE withdrawals SET status = 'FAILED', upstream = ?, updated_at = ? WHERE deposit_address = ? AND owner = ? AND status = 'PROCESSING' AND intent_hash IS NULL")
-      .bind(trimmed(s), ts, row.deposit_address, user.account)
+      .bind(JSON.stringify({ ...JSON.parse(trimmed(s)), stuckSubmit: true }), ts, row.deposit_address, user.account)
       .run();
     return toView(await load(db, user, row.deposit_address), now);
   }

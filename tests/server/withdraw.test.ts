@@ -397,16 +397,50 @@ test("a refresh racing a slow submit keeps PROCESSING, so a later submit failure
 test("a PROCESSING row with no intent hash that 1Click never saw fails after the deadline plus 2 minutes", async () => {
   const { db, f, q } = await quoted(NEAR_USER, { status: async () => swap("PENDING_DEPOSIT") });
   const dl = new Date(q.deadline).getTime();
-  await db.prepare("UPDATE withdrawals SET status = 'PROCESSING'").bind().run();
+  await db.prepare("UPDATE withdrawals SET status = 'PROCESSING' WHERE deposit_address = ?").bind(DEP).run();
   const at = (ms: number) => new Date(ms);
   assert.equal((await refreshWithdrawal(deps(db, f, at(dl + 119_000)), NEAR_USER, DEP)).status, "PROCESSING");
-  assert.equal((await refreshWithdrawal(deps(db, f, at(dl + 130_000)), NEAR_USER, DEP)).status, "FAILED");
+  const failed = await refreshWithdrawal(deps(db, f, at(dl + 130_000)), NEAR_USER, DEP);
+  assert.equal(failed.status, "FAILED");
   assert.equal((await rowOf(db))?.status, "FAILED");
+  assert.equal(failed.expiredUnsubmitted, true);
 });
 
 test("the stuck-submit expiry does not touch a row that has an intent hash", async () => {
   const { db, f, q } = await quoted(NEAR_USER, { status: async () => swap("PENDING_DEPOSIT") });
-  await db.prepare("UPDATE withdrawals SET status = 'PROCESSING', intent_hash = 'H'").bind().run();
+  await db.prepare("UPDATE withdrawals SET status = 'PROCESSING', intent_hash = 'H' WHERE deposit_address = ?").bind(DEP).run();
+  const before = await rowOf(db);
   const out = await refreshWithdrawal(deps(db, f, new Date(new Date(q.deadline).getTime() + 600_000)), NEAR_USER, DEP);
   assert.equal(out.status, "PENDING_DEPOSIT");
+  assert.equal(out.expiredUnsubmitted, undefined);
+  assert.equal((await rowOf(db))?.intent_hash, before?.intent_hash);
+});
+
+test("an upstream FAILED with no intent hash is plain FAILED, not expired-unsubmitted", async () => {
+  const { db, f, q } = await quoted(NEAR_USER, { status: async () => swap("FAILED") });
+  await db.prepare("UPDATE withdrawals SET status = 'PROCESSING' WHERE deposit_address = ?").bind(DEP).run();
+  const out = await refreshWithdrawal(deps(db, f, new Date(new Date(q.deadline).getTime() + 600_000)), NEAR_USER, DEP);
+  assert.equal(out.status, "FAILED");
+  assert.equal(out.expiredUnsubmitted, undefined);
+  assert.doesNotMatch(String((await rowOf(db))?.upstream), /stuckSubmit/);
+});
+
+test("a submit that lands after the stuck-submit rule failed the row records its hash and tracks it again", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>((r) => (release = r));
+  const { db, f, q } = await quoted(NEAR_USER, {
+    submit: async () => { await gate; return { intentHash: "LATE" }; },
+    status: async () => swap("PENDING_DEPOSIT"),
+  });
+  const submitting = submitWithdrawal(deps(db, f), NEAR_USER, { depositAddress: DEP, signedData: nepSigned(q.intent.payload) });
+  await new Promise((r) => setImmediate(r));
+  const failed = await refreshWithdrawal(deps(db, f, new Date(new Date(q.deadline).getTime() + 130_000)), NEAR_USER, DEP);
+  assert.equal(failed.status, "FAILED");
+  release();
+  const out = await submitting;
+  assert.equal(out.status, "PROCESSING");
+  assert.equal(out.expiredUnsubmitted, undefined);
+  const row = await rowOf(db);
+  assert.equal(row?.intent_hash, "LATE");
+  assert.equal(row?.upstream, null);
 });
