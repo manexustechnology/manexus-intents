@@ -497,13 +497,13 @@ export function parseKind(v: unknown): TransferKind | undefined {
 }
 
 /** History: everything that was ever submitted (unsigned quotes moved no funds and are hidden), optionally of one kind. */
-export async function listTransfers(deps: Pick<TransferDeps, "db" | "now">, user: User, kind?: TransferKind): Promise<TransferView[]> {
+export async function listTransfers(deps: Pick<TransferDeps, "db" | "now">, user: User, kind?: TransferKind, limit = 50): Promise<TransferView[]> {
   const k = parseKind(kind);
   const { results } = await deps.db
     .prepare(
-      `SELECT * FROM withdrawals WHERE owner = ?${k ? " AND kind = ?" : ""} AND (status != 'AWAITING_SIGNATURE' OR upstream IS NOT NULL) ORDER BY created_at DESC, deposit_address LIMIT 50`,
+      `SELECT * FROM withdrawals WHERE owner = ?${k ? " AND kind = ?" : ""} AND (status != 'AWAITING_SIGNATURE' OR upstream IS NOT NULL) ORDER BY created_at DESC, deposit_address LIMIT ?`,
     )
-    .bind(...(k ? [user.account, k] : [user.account]))
+    .bind(...(k ? [user.account, k, limit] : [user.account, limit]))
     .all<Raw>();
   return results.map((r) => toView({ ...r }, deps.now));
 }

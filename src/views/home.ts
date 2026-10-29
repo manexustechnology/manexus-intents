@@ -25,11 +25,19 @@ export function receivables(items: InvoiceRow[], now = new Date()): { totals: st
   return { totals, overdue: open.filter((i) => displayStatus(i.status, i.data.dueDate, now) === "overdue").length, count: open.length };
 }
 
+type ActivityItem = { at: string; type: string; title: string; amountFormatted: string; symbol: string; status: string; href: string };
+type MonthSummary = { month: string; tokens: { tokenId: string; symbol: string; receivedFormatted: string; sentFormatted: string; received: string; sent: string }[] };
+const ICONS: Record<string, string> = { invoice_paid: "↓", payment_received_extra: "↓", withdraw: "↑", swap: "⇄", bill: "↑", payroll: "↑" };
+const STATUS_LABEL: Record<string, string> = { paid: "Received", duplicate: "Extra payment", after_cancel: "Extra payment", SUCCESS: "Completed", PROCESSING: "Processing", PENDING_DEPOSIT: "Processing", AWAITING_SIGNATURE: "Awaiting signature", FAILED: "Failed", REFUNDED: "Refunded", INCOMPLETE_DEPOSIT: "Incomplete" };
+
 export function mountHome(el: HTMLElement): () => void {
   let alive = true;
   el.innerHTML = `<div class="heading"><div><p class="eyebrow">OVERVIEW</p><h1>Home</h1><p class="muted" id="home-custody">Your funds are held in your own NEAR Intents account, controlled by your wallet.</p></div><div class="home-actions"><a class="primary" href="#/invoices/new">+ New invoice</a><a class="secondary" href="#/withdraw">Withdraw</a></div></div>
-<section class="panel" aria-labelledby="home-balance-title"><p class="eyebrow" id="home-balance-title">TOTAL BALANCE</p><p class="home-total" id="home-total" role="status">Loading…</p><p class="muted"><small>USD values use a reference price and may differ from what you receive when withdrawing.</small></p><p class="error" id="home-balance-error" role="alert"></p><div class="home-cards" id="home-cards"></div></section>
-<section class="panel" aria-labelledby="home-recv-title"><p class="eyebrow" id="home-recv-title">RECEIVABLES</p><div id="home-recv"><p class="muted">Loading…</p></div></section>
+<section class="panel" aria-labelledby="home-balance-title"><p class="eyebrow" id="home-balance-title">CASH</p><p class="home-total" id="home-total" role="status">Loading…</p><p class="muted"><small>USD values use a reference price and may differ from what you receive when withdrawing.</small></p><p class="error" id="home-balance-error" role="alert"></p><div class="home-cards" id="home-cards"></div></section>
+<div class="home-tiles"><section class="panel" aria-labelledby="home-recv-title"><p class="eyebrow" id="home-recv-title">RECEIVABLES</p><div id="home-recv"><p class="muted">Loading…</p></div></section>
+<section class="panel" aria-labelledby="home-pay-title"><p class="eyebrow" id="home-pay-title">PAYABLES</p><div id="home-pay"><p class="muted">No bills yet</p></div></section>
+<section class="panel" aria-labelledby="home-month-title"><p class="eyebrow" id="home-month-title">THIS MONTH</p><div id="home-month"><p class="muted">Loading…</p></div></section></div>
+<section class="panel" aria-labelledby="home-activity-title"><p class="eyebrow" id="home-activity-title">ACTIVITY</p><div class="activity-list" id="home-activity"><p class="muted">Loading…</p></div></section>
 <section class="panel" aria-labelledby="home-recent-title"><div class="section-title"><p class="eyebrow" id="home-recent-title">RECENT INVOICES</p><a href="#/invoices">View all</a></div><div class="invoice-list" id="home-recent"><p class="muted">Loading…</p></div></section>`;
   const q = <T extends HTMLElement>(s: string) => el.querySelector<T>(s)!;
 
@@ -83,6 +91,35 @@ export function mountHome(el: HTMLElement): () => void {
       const msg = esc(e instanceof Error ? e.message : "Could not load invoices.");
       q("#home-recv").innerHTML = `<p class="error" role="alert">${msg}</p>`;
       q("#home-recent").innerHTML = "";
+    },
+  );
+  api<MonthSummary>("/api/activity?summary=month").then(
+    (m) => {
+      if (!alive) return;
+      const rows = m.tokens.filter((t) => t.received !== "0" || t.sent !== "0");
+      q("#home-month").innerHTML = rows.length
+        ? rows.map((t) => `<p><strong>${esc(t.symbol)}</strong> <span class="muted">received</span> ${esc(t.receivedFormatted)} · <span class="muted">sent</span> ${esc(t.sentFormatted)}</p>`).join("")
+        : `<p class="muted">No activity this month.</p>`;
+    },
+    (e: unknown) => {
+      if (alive) q("#home-month").innerHTML = `<p class="error" role="alert">${esc(e instanceof Error ? e.message : "Could not load this month.")}</p>`;
+    },
+  );
+
+  api<ActivityItem[]>("/api/activity").then(
+    (items) => {
+      if (!alive) return;
+      q("#home-activity").innerHTML = items.length
+        ? items
+            .map(
+              (a) =>
+                `<a class="activity-row" href="${esc(a.href)}"><span class="activity-icon" aria-hidden="true">${esc(ICONS[a.type] ?? "•")}</span><span><strong>${esc(a.title)}</strong><small>${esc(a.at.slice(0, 10))} · ${esc(STATUS_LABEL[a.status] ?? a.status)}</small></span><span class="activity-amount">${esc(a.amountFormatted)} ${esc(a.symbol)}</span></a>`,
+            )
+            .join("")
+        : `<p class="empty">No activity yet.</p>`;
+    },
+    (e: unknown) => {
+      if (alive) q("#home-activity").innerHTML = `<p class="error" role="alert">${esc(e instanceof Error ? e.message : "Could not load activity.")}</p>`;
     },
   );
   return () => {
