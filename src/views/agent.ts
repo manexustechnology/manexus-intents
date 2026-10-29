@@ -478,7 +478,8 @@ ${s.intro ?? ""}<pre class="sign-message" id="ag-sign-message">${esc(s.challenge
       if (!alive) return;
       // The draft only carries the sections the owner asked to change; every other saved section is kept.
       draft = mergeDraft(policy, out.policy);
-      draftState = { busy: false, error: "", notes: out.notes || "Draft loaded into the rules below." };
+      // The model's notes are untrusted text: labelled as the AI's and always escaped when drawn.
+      draftState = { busy: false, error: "", notes: out.notes ? `AI note: ${out.notes}` : "Draft loaded into the rules below." };
       rulesError = "";
       rulesNote = "AI draft loaded. Review it, then save and sign.";
       drawRules();

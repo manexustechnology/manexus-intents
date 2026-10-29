@@ -225,7 +225,7 @@ test("AI draft fills the Rules form without saving; summary is escaped text", as
   await page.getByRole("button", { name: "Draft rules" }).click();
   await expect(page.locator("#ag-convert-min")).toHaveValue("75.00");
   await expect(page.locator("#ag-bill-days")).toHaveValue("5");
-  await expect(page.locator("#ag-ai-draft")).toContainText("Converts above $75 <i>only</i>. Review and sign to save.");
+  await expect(page.locator("#ag-ai-draft")).toContainText("AI note: Converts above $75 <i>only</i>. Review and sign to save.");
   await expect(page.locator("#ag-ai-draft i")).toHaveCount(0);
   expect(calls.some((c) => c.method === "PUT" || c.path === "/api/agent/policy/challenge")).toBe(false);
   await page.getByRole("button", { name: "Save rules" }).click();
