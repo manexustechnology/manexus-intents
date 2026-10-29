@@ -24,7 +24,7 @@ const tokens = (JSON.parse(readFileSync("tests/fixtures/oneclick/tokens.json", "
 
 const ORIGIN = { symbol: "USDC", blockchain: "arb", decimals: 6 };
 
-function fake(over: Partial<{ amountIn: string; deadline: string }> = {}) {
+function fake(over: Partial<{ amountIn: string; deadline: string; amountOut: string }> = {}) {
   const calls = { quote: [] as QuoteRequest[], deposit: [] as [string, string][] };
   let n = 0;
   const oneclick = {
@@ -32,7 +32,7 @@ function fake(over: Partial<{ amountIn: string; deadline: string }> = {}) {
     quote: async (r: QuoteRequest) => {
       calls.quote.push(r);
       return {
-        depositAddress: `dep${++n}`, amountIn: over.amountIn ?? "710180", minAmountIn: "700000", amountOut: r.amount, minAmountOut: r.amount,
+        depositAddress: `dep${++n}`, amountIn: over.amountIn ?? "710180", minAmountIn: "700000", amountOut: over.amountOut ?? r.amount, minAmountOut: r.amount,
         deadline: over.deadline ?? r.deadline,
       };
     },
@@ -146,11 +146,16 @@ test("saveAttempt round-trips and getInvoiceByPublicId hides drafts", async () =
 });
 
 test("malformed upstream quotes are rejected before saving", async () => {
-  for (const over of [{ amountIn: "1.5" }, { amountIn: "" }, { deadline: "soon" }]) {
+  for (const over of [{ amountIn: "1.5" }, { amountIn: "" }, { deadline: "soon" }, { amountOut: "699999" }, { amountOut: "7e5" }, { amountOut: "" }]) {
     const { db, inv, oneclick } = await setup();
     const deps = { db, oneclick: fake(over).oneclick, now: NOW };
     void oneclick;
-    assert.equal(await status(createPaymentQuote(deps, inv.publicId, { originAsset: ARB, refundTo: REFUND })), 502);
+    await assert.rejects(createPaymentQuote(deps, inv.publicId, { originAsset: ARB, refundTo: REFUND }), (e: { status?: number; message?: string }) =>
+      e.status === 502 && e.message === "NEAR Intents returned an unexpected response", JSON.stringify(over));
     assert.equal((await listAttempts(db, inv.id)).length, 0);
   }
+  // Delivering more than the total is fine.
+  const { db, inv } = await setup();
+  await createPaymentQuote({ db, oneclick: fake({ amountOut: "700001" }).oneclick, now: NOW }, inv.publicId, { originAsset: ARB, refundTo: REFUND });
+  assert.equal((await listAttempts(db, inv.id)).length, 1);
 });

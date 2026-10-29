@@ -139,7 +139,13 @@ export async function createPaymentQuote(
     referral: "manexus",
   };
   const q = await oneclick.quote(request);
-  if (!q.depositAddress || !/^[0-9]+$/.test(q.amountIn) || Number.isNaN(new Date(q.deadline).getTime()))
+  if (
+    !q.depositAddress ||
+    !/^[0-9]+$/.test(q.amountIn) ||
+    !/^[0-9]+$/.test(q.amountOut) ||
+    BigInt(q.amountOut) < BigInt(inv.total) ||
+    Number.isNaN(new Date(q.deadline).getTime())
+  )
     throw new HttpError(502, "NEAR Intents returned an unexpected response");
 
   const row: AttemptRow = {
