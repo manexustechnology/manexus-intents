@@ -121,7 +121,7 @@ test("owner sees a mismatched payment as Needs review with the received amount",
 });
 
 test("owner sees a mismatch with no received amount as not received by their account", async ({ page }) => {
-  await mockApi(page, [attempt({ outcome: "mismatch" })]);
+  await mockApi(page, [attempt({ outcome: "mismatch", amountOut: undefined, amountOutFormatted: undefined })]);
   await createAndIssue(page);
   const row = page.locator('#invoice-payments [data-deposit="dep1"]');
   await expect(row.locator(".badge")).toHaveText("Needs review");
