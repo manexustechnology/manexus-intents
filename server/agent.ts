@@ -1,0 +1,176 @@
+// The deterministic treasury agent. `evaluate` is a pure function of (policy, balances, bills, invoices,
+// whitelist, now); `runAgent` stores its drafts as proposals. The agent never signs and never moves funds:
+// a proposal only becomes a transfer when the owner approves it with their own signature (Task 3).
+//
+// Throttle choice: no extra column. A run is skipped when the owner's newest proposal row was written less than
+// 60 s ago (`updated_at`, which inserts, expiries and dismissals all bump) unless `force`. A run that produces
+// and changes nothing therefore re-evaluates on the next request, which is cheap (all queries are bounded).
+import type { WhitelistEntry, Policy } from "./policy.ts";
+import { getPolicy, listWhitelist } from "./policy.ts";
+import { getBalances, type Balance } from "./balances.ts";
+import { listBills, type BillRow } from "./bills.ts";
+import type { Db } from "./db.ts";
+import { HttpError } from "./http.ts";
+import { listIssuedInvoices } from "./invoices.ts";
+import type { NearRpc } from "./near-rpc.ts";
+import type { OneClickToken } from "./oneclick.ts";
+import type { InvoiceRow } from "../shared/invoice.ts";
+
+type User = { account: string; kind: "near" | "evm" };
+export type ProposalType = "convert" | "sweep" | "pay_bill" | "follow_up_invoice";
+export type ProposalStatus = "proposed" | "executing" | "done" | "dismissed" | "expired";
+export type ProposalDraft = { type: ProposalType; dedupKey: string; params: Record<string, string>; expiresAt: string };
+export type Proposal = {
+  id: string; type: ProposalType; dedupKey: string; params: Record<string, string>; status: ProposalStatus;
+  depositAddress?: string; createdAt: string; updatedAt: string; expiresAt: string;
+};
+export type EvalInput = { now: Date; policy: Policy; balances: Balance[]; bills: BillRow[]; invoices: InvoiceRow[]; whitelist: WhitelistEntry[] };
+
+const HOUR = 3_600_000;
+const DAY = 24 * HOUR;
+export const THROTTLE_MS = 60_000;
+const ID = /^[A-Za-z0-9_-]{1,100}$/;
+
+/** "12.34" -> 1234n. Anything that is not a plain two-decimal-or-fewer dollar string is not comparable (undefined). */
+function usdCents(s: string | undefined): bigint | undefined {
+  const m = s === undefined ? null : /^(\d{1,30})(?:\.(\d{1,2}))?$/.exec(s);
+  return m ? BigInt(m[1]) * 100n + BigInt((m[2] ?? "").padEnd(2, "0") || "0") : undefined;
+}
+const isUnits = (s: string) => /^\d{1,78}$/.test(s);
+/** UTC midnight of a YYYY-MM-DD date, or NaN. */
+const dayMs = (d: string) => (/^\d{4}-\d{2}-\d{2}$/.test(d) ? Date.parse(`${d}T00:00:00.000Z`) : NaN);
+
+export function evaluate(input: EvalInput): ProposalDraft[] {
+  const { now, policy, balances, bills, invoices, whitelist } = input;
+  const out: ProposalDraft[] = [];
+  const hourLater = new Date(now.getTime() + HOUR).toISOString();
+  const today = dayMs(now.toISOString().slice(0, 10));
+
+  const c = policy.convert;
+  if (c?.enabled) {
+    const min = BigInt(c.minUsdCents);
+    for (const b of balances) {
+      if (b.tokenId === c.targetTokenId || !isUnits(b.amount) || BigInt(b.amount) <= 0n) continue;
+      const cents = usdCents(b.usd);
+      if (cents === undefined || cents < min) continue;
+      out.push({ type: "convert", dedupKey: `convert:${b.tokenId}`, params: { originAsset: b.tokenId, destinationAsset: c.targetTokenId, amount: b.amount }, expiresAt: hourLater });
+    }
+  }
+
+  const s = policy.sweep;
+  if (s?.enabled && whitelist.some((w) => w.id === s.whitelistId)) {
+    const bal = balances.find((b) => b.tokenId === s.tokenId);
+    if (bal && isUnits(bal.amount) && BigInt(bal.amount) > BigInt(s.thresholdUnits)) {
+      const amount = BigInt(bal.amount) - BigInt(s.keepUnits);
+      if (amount > 0n)
+        out.push({ type: "sweep", dedupKey: `sweep:${s.tokenId}:${s.whitelistId}`, params: { originAsset: s.tokenId, amount: amount.toString(), whitelistId: s.whitelistId }, expiresAt: hourLater });
+    }
+  }
+
+  const r = policy.reminders;
+  if (r) {
+    for (const b of bills) {
+      const due = dayMs(b.dueDate);
+      if (b.status !== "scheduled" || Number.isNaN(due) || due > today + r.billDueDays * DAY) continue;
+      // A long-overdue bill would otherwise be created already expired and re-created on every run.
+      const expires = Math.max(due + DAY, now.getTime() + HOUR);
+      out.push({ type: "pay_bill", dedupKey: `bill:${b.id}`, params: { billId: b.id }, expiresAt: new Date(expires).toISOString() });
+    }
+    for (const i of invoices) {
+      const due = dayMs(i.data.dueDate);
+      if (i.status !== "issued" || Number.isNaN(due) || today - due < Math.max(r.invoiceOverdueDays, 1) * DAY) continue;
+      out.push({ type: "follow_up_invoice", dedupKey: `invoice:${i.id}`, params: { invoiceId: i.id, publicId: i.publicId }, expiresAt: new Date(now.getTime() + 7 * DAY).toISOString() });
+    }
+  }
+  return out;
+}
+
+type Raw = { id: string; type: ProposalType; dedup_key: string; params: string; status: ProposalStatus; deposit_address: string | null; created_at: string; updated_at: string; expires_at: string };
+const COLS = "id, type, dedup_key, params, status, deposit_address, created_at, updated_at, expires_at";
+function view(r: Raw): Proposal {
+  return {
+    id: r.id, type: r.type, dedupKey: r.dedup_key, params: JSON.parse(r.params) as Record<string, string>, status: r.status,
+    ...(r.deposit_address ? { depositAddress: r.deposit_address } : {}), createdAt: r.created_at, updatedAt: r.updated_at, expiresAt: r.expires_at,
+  };
+}
+const sameParams = (a: Record<string, string>, b: Record<string, string>) => {
+  const ka = Object.keys(a), kb = Object.keys(b);
+  return ka.length === kb.length && ka.every((k) => Object.hasOwn(b, k) && a[k] === b[k]);
+};
+
+async function openProposals(db: Db, owner: string): Promise<Raw[]> {
+  const { results } = await db
+    .prepare(`SELECT ${COLS} FROM agent_proposals WHERE owner = ? AND status IN ('proposed','executing') ORDER BY created_at, id LIMIT 200`)
+    .bind(owner)
+    .all<Raw>();
+  return results;
+}
+
+/** The owner's open (proposed or executing) proposals. */
+export async function listProposals(db: Db, user: User): Promise<Proposal[]> {
+  return (await openProposals(db, user.account)).map(view);
+}
+
+export type AgentDeps = { db: Db; rpc: NearRpc; oneclick: { tokens(): Promise<OneClickToken[]> }; now: Date };
+
+/**
+ * Evaluate the owner's rules and store the result: new drafts become `proposed`; open `proposed` rows whose
+ * basis changed (key no longer produced, different params, or past `expires_at`) are expired. `executing` rows
+ * are never touched here. A draft the owner dismissed with identical params is not proposed again. One batch
+ * writes everything; at most 13 queries. A balances failure is 502 and nothing is written.
+ */
+export async function runAgent(deps: AgentDeps, user: User, opts: { force?: boolean } = {}): Promise<Proposal[]> {
+  const { db, now } = deps;
+  const owner = user.account;
+  const { policy } = await getPolicy(db, user);
+  if (!policy) return [];
+  if (!opts.force) {
+    const last = await db.prepare("SELECT MAX(updated_at) AS t FROM agent_proposals WHERE owner = ?").bind(owner).first<{ t: string | null }>();
+    const t = last?.t ? Date.parse(last.t) : NaN;
+    if (!Number.isNaN(t) && now.getTime() - t < THROTTLE_MS && now.getTime() >= t) return listProposals(db, user);
+  }
+  const balances = await getBalances({ db, rpc: deps.rpc, oneclick: deps.oneclick }, owner);
+  const whitelist = await listWhitelist(db, user);
+  const bills = await listBills(db, owner, "scheduled", 0);
+  if (bills.length === 100) bills.push(...(await listBills(db, owner, "scheduled", 1)));
+  const invoices = await listIssuedInvoices(db, owner);
+  const drafts = evaluate({ now, policy, balances, bills, invoices, whitelist });
+
+  const open = await openProposals(db, owner);
+  const { results: dismissed } = await db
+    .prepare("SELECT dedup_key, params FROM agent_proposals WHERE owner = ? AND status = 'dismissed' ORDER BY updated_at DESC LIMIT 200")
+    .bind(owner)
+    .all<{ dedup_key: string; params: string }>();
+  const ts = now.toISOString();
+  const stmts = [];
+  const keep = new Set<string>();
+  for (const o of open) {
+    const d = drafts.find((x) => x.dedupKey === o.dedup_key);
+    if (o.status === "executing") { keep.add(o.dedup_key); continue; }
+    if (d && sameParams(d.params, JSON.parse(o.params) as Record<string, string>) && Date.parse(o.expires_at) > now.getTime()) { keep.add(o.dedup_key); continue; }
+    stmts.push(db.prepare("UPDATE agent_proposals SET status = 'expired', updated_at = ? WHERE id = ? AND owner = ? AND status = 'proposed'").bind(ts, o.id, owner));
+  }
+  for (const d of drafts) {
+    if (keep.has(d.dedupKey)) continue;
+    if (dismissed.some((x) => x.dedup_key === d.dedupKey && sameParams(d.params, JSON.parse(x.params) as Record<string, string>))) continue;
+    stmts.push(
+      db.prepare("INSERT INTO agent_proposals (id, owner, type, dedup_key, params, status, created_at, updated_at, expires_at) VALUES (?, ?, ?, ?, ?, 'proposed', ?, ?, ?) ON CONFLICT DO NOTHING")
+        .bind(crypto.randomUUID(), owner, d.type, d.dedupKey, JSON.stringify(d.params), ts, ts, d.expiresAt),
+    );
+  }
+  if (stmts.length) await db.batch(stmts);
+  return listProposals(db, user);
+}
+
+/** proposed → dismissed for the owner's own proposal. 404 if it is not theirs, 409 if it is no longer `proposed`. */
+export async function dismissProposal(db: Db, user: User, id: string, now = new Date()): Promise<Proposal> {
+  if (!ID.test(id)) throw new HttpError(404, "Proposal not found");
+  const r = await db
+    .prepare("UPDATE agent_proposals SET status = 'dismissed', updated_at = ? WHERE id = ? AND owner = ? AND status = 'proposed'")
+    .bind(now.toISOString(), id, user.account)
+    .run();
+  const cur = await db.prepare(`SELECT ${COLS} FROM agent_proposals WHERE id = ? AND owner = ?`).bind(id, user.account).first<Raw>();
+  if (!cur) throw new HttpError(404, "Proposal not found");
+  if (r.meta.changes !== 1) throw new HttpError(409, "This proposal is no longer open");
+  return view(cur);
+}

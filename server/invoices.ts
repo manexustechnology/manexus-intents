@@ -142,3 +142,12 @@ export async function getPublicInvoice(db: Db, publicId: string): Promise<Public
     dueDate: inv.data.dueDate,
   };
 }
+
+/** The owner's issued invoices, soonest due first, at most 200 (agent reminders). */
+export async function listIssuedInvoices(db: Db, owner: string): Promise<InvoiceRow[]> {
+  const { results } = await db
+    .prepare(`SELECT ${COLS} FROM invoices WHERE owner = ? AND status = 'issued' ORDER BY updated_at DESC, id LIMIT 200`)
+    .bind(owner)
+    .all<Raw>();
+  return results.map(row);
+}
