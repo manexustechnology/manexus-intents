@@ -5,10 +5,15 @@ compatibility_date = "2026-10-01"
 [[d1_databases]]
 binding = "DB"
 database_name = "manexus-intents"
-# Placeholder for local dev only; Task 9 fills in the real database id.
-database_id = "local-placeholder"
+database_id = "3aa44272-db3b-4d56-b2ae-64162b6b415f"
 migrations_dir = "migrations"
 
 [vars]
 NEAR_RPC_URL = "https://rpc.mainnet.fastnear.com"
 ONECLICK_BASE_URL = "https://1click.chaindefuser.com"
+NEAR_AI_MODEL = "z-ai/glm-5.3-flash"
+NEAR_AI_BASE_URL = "https://cloud-api.near.ai/v1"
+
+# This file is the source of truth for the Pages project: a deploy replaces the
+# dashboard's plain-text variables with [vars] above. Keys stay Pages secrets
+# (SESSION_SECRET, ONECLICK_API_KEY, NEAR_AI_API_KEY), which a deploy keeps.
