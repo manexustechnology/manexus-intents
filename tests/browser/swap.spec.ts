@@ -103,7 +103,7 @@ test("a destination token without a price shows no USD for it", async ({ page })
   await page.getByRole("button", { name: "Get quote" }).click();
   await expect(page.locator("#sw-receive")).toHaveText("≈ 0.468684 NOP");
   // Only the priced origin token shows a USD value.
-  await expect(page.locator("#sw-review small")).toHaveCount(1);
+  await expect(page.locator("#sw-review .invoice-total small")).toHaveCount(1);
   await expect(page.locator(".invoice-total").nth(1)).not.toContainText("$");
 });
 

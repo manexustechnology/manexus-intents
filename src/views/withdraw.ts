@@ -3,7 +3,7 @@ import { escapeHTML as esc } from "../../shared/text.ts";
 import { baseUnits } from "../../shared/units.ts";
 import { api, postJson } from "../api.ts";
 import { registerKey, signAndSubmit } from "../sign-flow.ts";
-import { countdown, msg } from "./transfer-ui.ts";
+import { countdown, emptyBalanceHtml, msg, routeHtml } from "./transfer-ui.ts";
 import { NEAR_WALLETS, walletConnected, type NearWalletId, type Session } from "../wallet/index.ts";
 
 type Balance = { tokenId: string; symbol: string; blockchain: string; decimals: number; amount: string; formatted: string };
@@ -102,7 +102,7 @@ export function mountWithdraw(el: HTMLElement): () => void {
     const dests = tokens.filter((t) => supportedChain(t.blockchain) && (!s || tokenLabel(t).toLowerCase().includes(s) || t.blockchain.includes(s)));
     const d = tokenOf(form.dest);
     if (!balances.length)
-      return `<section class="panel"><h2>Nothing to withdraw yet</h2><p class="muted">Your NEAR Intents balance is empty. Paid invoices land there.</p></section>`;
+      return emptyBalanceHtml("Nothing to withdraw yet");
     return `<section class="panel"><form id="wd-form" novalidate>
 <label>From your balance<select id="wd-origin"><option value="">Choose a balance</option>${balances
       .map((x) => `<option value="${esc(x.tokenId)}" ${x.tokenId === form.origin ? "selected" : ""}>${esc(x.formatted)} ${esc(x.symbol)} (${esc(chainName(x.blockchain))})</option>`)
@@ -124,6 +124,7 @@ ${b ? `<p class="fine">Available: ${esc(b.formatted)} ${esc(b.symbol)}</p>` : ""
     const chain = chainName(w.destinationBlockchain);
     const needsNearWallet = session?.kind === "near" && !walletConnected(session);
     return `<section class="panel" id="wd-review"><div class="section-title"><h2>Review withdrawal</h2><span class="muted">Quote expires in <span id="wd-countdown">${countdown(qt.deadline)}</span></span></div>
+${routeHtml([{ symbol: w.originSymbol, where: "NEAR Intents" }, { symbol: w.destinationSymbol, where: chain }])}
 <div class="pay-field"><span class="eyebrow">NETWORK</span><strong id="wd-network">${esc(chain)}</strong></div>
 <div class="pay-field"><span class="eyebrow">DESTINATION ADDRESS</span><code id="wd-address">${esc(w.recipient)}</code></div>
 <p class="invoice-total"><span>You send</span><strong id="wd-send">${esc(w.amountFormatted)} ${esc(w.originSymbol)}</strong></p>

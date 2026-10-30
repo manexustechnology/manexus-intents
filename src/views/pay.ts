@@ -4,6 +4,8 @@ import { escapeHTML as esc } from "../../shared/text.ts";
 import { api } from "../api.ts";
 import { details } from "./invoice-detail.ts";
 import { txLinks } from "./invoices.ts";
+import { routeHtml } from "./transfer-ui.ts";
+import { chainName } from "./withdraw.ts";
 
 type Token = { assetId: string; symbol: string; blockchain: string; decimals: number };
 type Attempt = {
@@ -123,7 +125,8 @@ export function mountPay(el: HTMLElement, params: Record<string, string>): () =>
     const done = a.status !== "PENDING_DEPOSIT";
     return `<section class="panel pay-instructions"><div class="section-title"><h2>Send payment</h2></div>
 ${a.amountInFormatted ? `<p class="invoice-total"><span>Send exactly</span><strong id="pay-amount">${esc(a.amountInFormatted)} ${esc(a.symbol)}</strong></p>
-<p class="muted">on ${esc(a.blockchain)}</p>` : `<p class="error" role="alert">The amount for these instructions is unavailable right now. Do not send funds until it is shown. Reload to try again.</p>`}
+<p class="muted">on ${esc(a.blockchain)}</p>
+${inv ? routeHtml([{ symbol: a.symbol, where: chainName(a.blockchain) }, { symbol: inv.symbol, where: "NEAR Intents" }]) : ""}` : `<p class="error" role="alert">The amount for these instructions is unavailable right now. Do not send funds until it is shown. Reload to try again.</p>`}
 ${a.status === "INCOMPLETE_DEPOSIT" ? `<p class="error" role="alert">The deposit received is less than required. Send the remaining amount before the deadline, or it will be refunded.</p>` : ""}
 <div class="pay-field"><span class="eyebrow">DEPOSIT ADDRESS</span><code id="pay-address">${esc(a.depositAddress)}</code><button class="textbutton" type="button" data-copy="${esc(a.depositAddress)}">Copy address</button></div>
 ${a.depositMemo ? `<div class="pay-field"><span class="eyebrow">MEMO (REQUIRED)</span><code id="pay-memo">${esc(a.depositMemo)}</code><button class="textbutton" type="button" data-copy="${esc(a.depositMemo)}">Copy memo</button></div>` : ""}

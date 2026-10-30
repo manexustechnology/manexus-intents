@@ -3,7 +3,7 @@ import { api, postJson } from "../api.ts";
 import { registerKey, signAndSubmit, type TransferView } from "../sign-flow.ts";
 import { NEAR_WALLETS, walletConnected, type NearWalletId, type Session } from "../wallet/index.ts";
 import { amountLabel, billStatusBadge, dueChip, type Bill } from "./bills.ts";
-import { countdown, msg } from "./transfer-ui.ts";
+import { countdown, emptyBalanceHtml, msg } from "./transfer-ui.ts";
 import { chainName, explorerLinks } from "./withdraw.ts";
 
 type Detail = Bill & { transfer?: TransferView; vendorInvoiceStatus?: string; vendorOutcome?: string; extraPayment: boolean; refreshError?: string; pendingQuote?: Quote };
@@ -94,7 +94,7 @@ ${unsigned ? `<p class="fine">If you left before signing, this quote expires in 
 
   function pickHtml(): string {
     if (!balances.length)
-      return `<section class="panel" id="bill-pick"><h2>Nothing to pay with yet</h2><p class="muted">Your NEAR Intents balance is empty. Paid invoices land there.</p><button class="textbutton" type="button" id="bill-pick-back">Back</button></section>`;
+      return emptyBalanceHtml("Nothing to pay with yet", `<button class="textbutton" type="button" id="bill-pick-back">Back</button>`, "bill-pick");
     return `<section class="panel" id="bill-pick"><h2>Pay from balance</h2><label>Pay with<select id="bill-origin">${balances
       .map((x) => `<option value="${esc(x.tokenId)}" ${x.tokenId === origin ? "selected" : ""}>${esc(x.formatted)} ${esc(x.symbol)} (${esc(chainName(x.blockchain))})</option>`)
       .join("")}</select></label>

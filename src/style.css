@@ -9,6 +9,8 @@
   background: #f5f7f6;
   font-synthesis: none;
   font-size: 14px;
+  /* Equal-width digits so amounts line up in lists and tables. */
+  font-variant-numeric: tabular-nums;
 }
 * {
   box-sizing: border-box;
@@ -78,9 +80,9 @@ aside {
   margin-left: -9px;
 }
 .workspace {
-  font-size: 9px;
+  font-size: 11px;
   letter-spacing: 1.9px;
-  color: #84948c;
+  color: #63726b;
   margin: 52px 12px 19px;
 }
 .nav {
@@ -98,8 +100,13 @@ aside {
   text-decoration: none;
 }
 .nav > span {
-  font-size: 22px;
+  display: inline-flex;
+  justify-content: center;
   width: 24px;
+}
+.icon {
+  display: block;
+  flex: none;
 }
 .nav.active {
   background: #eaf3e6;
@@ -107,15 +114,19 @@ aside {
 }
 .nav small {
   margin-left: auto;
-  font-size: 8px;
-  color: #69844b;
+  font-size: 11px;
+  color: #5f7744;
 }
 /* Mobile-only "More" entry and its menu (Payroll, Withdraw, Sign out). */
 .nav-more,
 .more-menu {
   display: none;
 }
-button.nav,
+/* Only the family: size and weight come from .nav so "More" matches the other tabs. */
+button.nav {
+  font-family: inherit;
+  cursor: pointer;
+}
 .more-item {
   font: inherit;
   cursor: pointer;
@@ -138,9 +149,9 @@ button.nav,
   text-decoration: none;
 }
 .more-item > span {
+  display: inline-flex;
+  justify-content: center;
   width: 20px;
-  font-size: 18px;
-  text-align: center;
 }
 .more-item.active,
 .more-item:hover {
@@ -149,10 +160,10 @@ button.nav,
 .sidebottom {
   margin-top: auto;
   font-size: 11px;
-  color: #819087;
+  color: #66736b;
 }
 .network {
-  font-size: 10px;
+  font-size: 11px;
   margin-bottom: 24px;
   display: flex;
   gap: 7px;
@@ -190,7 +201,7 @@ header {
 }
 .crumb {
   font-size: 12px;
-  color: #667c70;
+  color: #5f7468;
 }
 .crumb span {
   margin: 0 14px;
@@ -203,7 +214,7 @@ header {
 }
 .badge {
   display: inline-block;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
   border: 1px solid #dce5de;
   padding: 7px 10px;
@@ -234,9 +245,9 @@ main {
   margin-bottom: 28px;
 }
 .eyebrow {
-  font-size: 9px;
+  font-size: 11px;
   letter-spacing: 1.8px;
-  color: #6c8175;
+  color: #607368;
   font-weight: 700;
   margin: 0 0 13px;
 }
@@ -256,7 +267,7 @@ p {
   line-height: 1.65;
 }
 .muted {
-  color: #7c8b82;
+  color: #66736b;
   font-size: 12px;
   margin: 0;
 }
@@ -265,8 +276,8 @@ p {
   display: flex;
   align-items: center;
   gap: 7px;
-  font-size: 10px;
-  color: #6b7d71;
+  font-size: 11px;
+  color: #637368;
 }
 .hero {
   position: relative;
@@ -283,9 +294,9 @@ p {
   width: 55%;
 }
 .pill {
-  font-size: 8px;
+  font-size: 11px;
   letter-spacing: 1.5px;
-  color: #c8e4b3;
+  color: #4e7b2c;
   border: 1px solid #436452;
   padding: 6px 9px;
   border-radius: 20px;
@@ -297,10 +308,10 @@ p {
   margin: 24px 0 12px;
 }
 .hero h2 span {
-  color: #c4ee83;
+  color: #517b11;
 }
 .hero p {
-  color: #b1c8bb;
+  color: #547764;
   font-size: 11px;
 }
 .primary {
@@ -323,9 +334,9 @@ p {
 }
 .hero small {
   display: block;
-  font-size: 8px;
+  font-size: 11px;
   margin-top: 13px;
-  color: #a3b8a9;
+  color: #5b7663;
 }
 .orb {
   position: absolute;
@@ -348,7 +359,7 @@ p {
   flex-direction: column;
   font-size: 100px;
   font-style: italic;
-  color: #d0f5a3;
+  color: #4a7c0d;
   background: radial-gradient(circle at 35% 30%, #4e7857, #153e32 70%);
   box-shadow:
     inset -20px -20px 40px #071c2455,
@@ -357,7 +368,7 @@ p {
   line-height: 1;
 }
 .globe span {
-  font-size: 8px;
+  font-size: 11px;
   letter-spacing: 3px;
   margin: 8px 0 20px;
   font-style: normal;
@@ -410,9 +421,9 @@ p {
   position: absolute;
   bottom: 26px;
   right: 26px;
-  font-size: 7px;
+  font-size: 11px;
   letter-spacing: 2px;
-  color: #8dab8c;
+  color: #587757;
 }
 .quick-grid {
   display: grid;
@@ -434,7 +445,7 @@ p {
   width: 32px;
   height: 32px;
   background: #eff4e9;
-  color: #5c7846;
+  color: #5a7544;
   border-radius: 9px;
   font-size: 22px;
   margin-bottom: 14px;
@@ -444,15 +455,15 @@ p {
   font-size: 12px;
 }
 .quick p {
-  font-size: 10px;
-  color: #89968c;
+  font-size: 11px;
+  color: #67736a;
   margin: 6px 0 0;
 }
 .arrow {
   position: absolute;
   right: 18px;
   top: 22px;
-  color: #89978b;
+  color: #657367;
 }
 .panel {
   padding: 25px;
@@ -467,8 +478,8 @@ p {
   align-items: center;
 }
 .section-title p {
-  font-size: 10px;
-  color: #819086;
+  font-size: 11px;
+  color: #66736a;
   margin: 4px 0 18px;
 }
 .search {
@@ -496,8 +507,8 @@ p {
   gap: 15px;
 }
 .table-head {
-  font-size: 9px;
-  color: #8e9b92;
+  font-size: 11px;
+  color: #657269;
   border-bottom: 1px solid #e8ede9;
   padding-bottom: 12px;
 }
@@ -519,8 +530,8 @@ p {
 }
 .asset-name small {
   display: block;
-  font-size: 9px;
-  color: #8a978d;
+  font-size: 11px;
+  color: #667369;
   margin-top: 4px;
 }
 .coin {
@@ -535,19 +546,19 @@ p {
 }
 .coin.usdc {
   background: #e1eefb;
-  color: #397cc1;
+  color: #316ca7;
 }
 .coin.btc {
   background: #fff0dd;
-  color: #e6a34d;
+  color: #995f15;
 }
 .coin.eth {
   background: #ecedf5;
-  color: #6a7599;
+  color: #5f698b;
 }
 .coin.sol {
   background: #e9f2ec;
-  color: #657f6c;
+  color: #5a7160;
 }
 .round {
   background: #f4f7f2;
@@ -555,15 +566,15 @@ p {
   border-radius: 50%;
   height: 26px;
   width: 26px;
-  color: #768c6f;
+  color: #62745c;
 }
 footer {
   margin-top: auto;
   display: flex;
   justify-content: space-between;
   padding: 0 42px 25px;
-  font-size: 9px;
-  color: #9aa59e;
+  font-size: 11px;
+  color: #66736b;
   gap: 15px;
 }
 .two-column {
@@ -580,7 +591,7 @@ footer {
 .big-icon {
   font-size: 40px;
   display: block;
-  color: #72955b;
+  color: #5b7749;
   margin-bottom: 22px;
 }
 .explain h2,
@@ -589,7 +600,7 @@ footer {
   line-height: 1.2;
 }
 .explain > p {
-  color: #819086;
+  color: #66736a;
 }
 .note,
 .notice {
@@ -607,7 +618,7 @@ footer {
 }
 .fine {
   font-size: 11px;
-  color: #819086;
+  color: #66736a;
   line-height: 1.65;
 }
 .full {
@@ -617,7 +628,7 @@ footer {
 .disabled {
   cursor: not-allowed;
   background: #edf0ec;
-  color: #83907e;
+  color: #626d5e;
   border-radius: 8px;
   padding: 14px;
   font-size: 12px;
@@ -647,7 +658,7 @@ form > label > select {
   background: #f5f8f2;
   padding: 18px;
   border-radius: 10px;
-  color: #809078;
+  color: #66735f;
 }
 .amountrow {
   display: flex;
@@ -683,7 +694,7 @@ form > label > select {
   font-size: 22px;
   width: 34px;
   height: 34px;
-  color: #698157;
+  color: #5b704c;
 }
 fieldset {
   border: 0;
@@ -693,7 +704,7 @@ fieldset {
 legend {
   font-size: 11px;
   margin-bottom: 12px;
-  color: #76876b;
+  color: #65735b;
 }
 .radio {
   display: inline-flex;
@@ -719,7 +730,7 @@ dl > div {
   margin: 14px 0;
 }
 dt {
-  color: #85907e;
+  color: #697363;
 }
 dd {
   margin: 0;
@@ -730,7 +741,7 @@ dd {
   padding: 35px 25px;
 }
 .request-preview h2 span {
-  color: #8ba077;
+  color: #627451;
 }
 .request-preview code {
   display: block;
@@ -757,7 +768,7 @@ dd {
 .concept-art {
   height: 160px;
   background: linear-gradient(145deg, #edf1e1, #c3d3b5);
-  color: #6e8964;
+  color: #5f7656;
   display: grid;
   place-items: center;
   font-size: 76px;
@@ -769,12 +780,12 @@ dd {
   position: absolute;
   bottom: 12px;
   left: 12px;
-  font-size: 8px;
+  font-size: 11px;
   letter-spacing: 1px;
 }
 .concept p {
   font-size: 12px;
-  color: #819086;
+  color: #66736a;
 }
 .prose {
   max-width: 760px;
@@ -783,7 +794,7 @@ dd {
   margin-top: 25px;
 }
 .prose p {
-  color: #708474;
+  color: #627365;
 }
 .prose a {
   color: #3d724f;
@@ -802,7 +813,7 @@ dd {
   max-width: 85vw;
 }
 .empty {
-  color: #7c8b73;
+  color: #67735f;
   font-size: 12px;
 }
 @media (min-width: 1450px) {
@@ -888,12 +899,13 @@ dd {
     gap: 3px;
     margin: 0;
     padding: 7px 1px;
-    font-size: 9px;
+    font-size: 11px;
     justify-content: center;
     border-radius: 9px;
   }
-  .nav > span {
-    font-size: 22px;
+  .nav .icon {
+    width: 22px;
+    height: 22px;
   }
   .nav small {
     display: none;
@@ -927,11 +939,11 @@ dd {
     max-width: 320px;
   }
   .eyebrow {
-    font-size: 8px;
+    font-size: 11px;
   }
   .livebadge {
     margin-top: 15px;
-    font-size: 9px;
+    font-size: 11px;
   }
   .hero {
     min-height: 365px;
@@ -944,7 +956,7 @@ dd {
     font-size: 35px;
   }
   .hero p {
-    font-size: 10px;
+    font-size: 11px;
     max-width: 200px;
   }
   .orb {
@@ -1002,11 +1014,11 @@ dd {
     min-height: 137px;
   }
   .quick strong {
-    font-size: 10px;
+    font-size: 11px;
     line-height: 1.4;
   }
   .quick p {
-    font-size: 9px;
+    font-size: 11px;
     line-height: 1.5;
   }
   .arrow {
@@ -1035,7 +1047,7 @@ dd {
   }
   .section-title .textbutton {
     white-space: nowrap;
-    font-size: 10px;
+    font-size: 11px;
     padding: 0;
   }
   .search {
@@ -1050,12 +1062,12 @@ dd {
     font-size: 11px;
   }
   .table-head {
-    font-size: 8px;
+    font-size: 11px;
   }
   footer {
     padding: 0 18px 95px;
     display: block;
-    font-size: 8px;
+    font-size: 11px;
   }
   footer span {
     display: block;
@@ -1085,10 +1097,10 @@ dd {
     font-size: 13px;
   }
   .badge {
-    font-size: 8px;
+    font-size: 11px;
   }
   .hero small {
-    font-size: 8px;
+    font-size: 11px;
   }
   .notice {
     padding: 17px;
@@ -1140,8 +1152,8 @@ dd {
   font-size: 11px;
 }
 .invoice-record small {
-  font-size: 9px;
-  color: #6b8067;
+  font-size: 11px;
+  color: #62755e;
 }
 .invoice-notice {
   min-height: 20px;
@@ -1228,8 +1240,8 @@ dd {
   font-size: 12px;
 }
 .invoice-line-head {
-  font-size: 9px;
-  color: #87957b;
+  font-size: 11px;
+  color: #67735d;
 }
 .invoice-line-view span {
   overflow-wrap: anywhere;
@@ -1249,7 +1261,7 @@ dd {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   font-size: 12px;
-  color: #657e62;
+  color: #5e755b;
 }
 .invoice-document > .textbutton {
   margin-right: 20px;
@@ -1320,7 +1332,7 @@ dd {
     box-shadow: 0 12px 32px rgba(23, 63, 53, 0.16);
   }
   .nav {
-    font-size: 8px;
+    font-size: 11px;
   }
   .invoice-layout {
     grid-template-columns: 1fr;
@@ -1354,11 +1366,11 @@ dd {
   .invoice-line-head,
   .invoice-line-view {
     grid-template-columns: 1.5fr 0.4fr 1fr 1fr;
-    font-size: 10px;
+    font-size: 11px;
     gap: 8px;
   }
   .invoice-line-head {
-    font-size: 8px;
+    font-size: 11px;
   }
   .invoice-total strong {
     font-size: 18px;
@@ -1525,15 +1537,16 @@ a.primary {
   background: #fbefe9;
 }
 .badge.status-cancelled {
-  color: #7a7a7a;
+  color: #707070;
 }
 
-.pay-instructions .pay-field {
+.pay-field {
   display: grid;
   gap: 6px;
   margin: 14px 0;
 }
-.pay-instructions code {
+.pay-instructions code,
+.pay-field code {
   display: block;
   overflow-wrap: anywhere;
   background: #f5f8f2;
@@ -1548,7 +1561,7 @@ a.primary {
 /* Home */
 .home-actions { display: flex; gap: 10px; flex-wrap: wrap; }
 .home-total { font-size: 30px; font-weight: 600; margin: 6px 0; }
-.home-total small { font-size: 12px; font-weight: 400; color: #819086; }
+.home-total small { font-size: 12px; font-weight: 400; color: #66736a; }
 .home-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 12px; margin-top: 14px; }
 .home-card { display: flex; flex-direction: column; gap: 4px; padding: 14px 16px; border: 1px solid #e1e8e2; border-radius: 11px; }
 main > .panel { margin-bottom: 16px; }
@@ -1561,7 +1574,7 @@ a.secondary { display: inline-flex; align-items: center; padding: 0 16px; min-he
 .activity-list { display: flex; flex-direction: column; }
 .activity-row { display: grid; grid-template-columns: 32px 1fr auto; gap: 12px; align-items: center; padding: 10px 0; border-top: 1px solid #e1e8e2; color: inherit; text-decoration: none; }
 .activity-row:first-child { border-top: 0; }
-.activity-row small { display: block; color: #819086; }
+.activity-row small { display: block; color: #66736a; }
 .activity-icon { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 50%; background: #eef3ef; }
 .activity-amount { font-variant-numeric: tabular-nums; }
 
@@ -1604,7 +1617,7 @@ a.secondary { display: inline-flex; align-items: center; padding: 0 16px; min-he
   background: #2f6b3c;
 }
 .badge.status-bill-cancelled {
-  color: #7a7a7a;
+  color: #707070;
 }
 
 /* Payroll */
@@ -1634,3 +1647,39 @@ a.secondary { display: inline-flex; align-items: center; padding: 0 16px; min-he
 .ag-caps input { width: 100%; min-width: 90px; }
 .sign-warning { color: #9a3b1f; background: #fbefe9; border: 1px solid #e6b9a8; border-radius: 8px; padding: 8px 12px; margin: 8px 0; font-size: 13px; font-weight: 600; }
 .sign-warning p { margin: 0; }
+.route {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  list-style: none;
+  margin: 0 0 20px;
+  padding: 0;
+}
+.route li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.route-step {
+  display: flex;
+  flex-direction: column;
+  padding: 8px 12px;
+  border: 1px solid #dfe8e1;
+  border-radius: 10px;
+  background: #f5f8f2;
+}
+.route-step strong {
+  font-size: 13px;
+}
+.route-step small {
+  font-size: 11px;
+  color: #5d6f64;
+}
+.route-arrow {
+  display: inline-flex;
+  color: #4e7c2b;
+}
+.empty-state .invoice-actions {
+  margin-top: 18px;
+}

@@ -3,7 +3,7 @@ import { baseUnits } from "../../shared/units.ts";
 import { api, postJson } from "../api.ts";
 import { registerKey, signAndSubmit, type TransferView } from "../sign-flow.ts";
 import { NEAR_WALLETS, walletConnected, type NearWalletId, type Session } from "../wallet/index.ts";
-import { countdown, msg } from "./transfer-ui.ts";
+import { countdown, emptyBalanceHtml, msg, routeHtml } from "./transfer-ui.ts";
 import { chainName } from "./withdraw.ts";
 
 type Balance = { tokenId: string; symbol: string; blockchain: string; decimals: number; amount: string; formatted: string };
@@ -88,7 +88,7 @@ export function mountSwap(el: HTMLElement): () => void {
 
   function formHtml(): string {
     if (!balances.length)
-      return `<section class="panel"><h2>Nothing to swap yet</h2><p class="muted">Your NEAR Intents balance is empty. Paid invoices land there.</p></section>`;
+      return emptyBalanceHtml("Nothing to swap yet");
     const b = balanceOf(form.origin);
     const { matches, shown } = destOptions();
     return `<section class="panel"><form id="sw-form" novalidate>
@@ -122,6 +122,7 @@ ${matches.length > shown.length ? `<p class="fine">Showing the first ${MAX_OPTIO
     };
     const rate = od !== undefined && d ? `<p class="fine" id="sw-rate">1 ${esc(t.originSymbol)} ≈ ${esc(swapRate(BigInt(t.amount), od, BigInt(t.amountOut), d.decimals))} ${esc(t.destinationSymbol)}</p>` : "";
     return `<section class="panel" id="sw-review"><div class="section-title"><h2>Review swap</h2><span class="muted">Quote expires in <span id="sw-countdown">${countdown(qt.deadline)}</span></span></div>
+${routeHtml([{ symbol: t.originSymbol, where: "NEAR Intents" }, { symbol: t.destinationSymbol, where: "NEAR Intents" }])}
 <p class="invoice-total"><span>You send</span><strong id="sw-send">${esc(t.amountFormatted)} ${esc(t.originSymbol)}</strong>${usd(t.amount, od, o?.price)}</p>
 <p class="invoice-total"><span>You receive</span><strong id="sw-receive">≈ ${esc(qt.amountOutFormatted)} ${esc(t.destinationSymbol)}</strong>${usd(t.amountOut, d?.decimals, d?.price)}</p>
 <p class="fine" id="sw-min">Minimum received: ${esc(t.minAmountOutFormatted)} ${esc(t.destinationSymbol)}. If the price moves further than your slippage, the swap is refunded to your NEAR Intents balance.</p>
