@@ -38,13 +38,21 @@ export async function connectNear(walletId: NearWalletId): Promise<string> {
   return accountId;
 }
 
+/**
+ * wallet-selector's signMessage wrapper rejects a plain Uint8Array nonce: it validates with
+ * Buffer.isBuffer ("Invalid nonce. It must be a Buffer with a length of 32 bytes."), and the
+ * browser polyfill's isBuffer duck-checks `_isBuffer`, which only Buffer instances carry.
+ */
+export async function nep413Nonce(nonce: Uint8Array): Promise<Uint8Array> {
+  return (await import("buffer")).Buffer.from(nonce);
+}
+
 /** NEP-413 signMessage. Returns the wallet's `ed25519:<base58>` public key and base64 signature. */
 export async function signNep413(p: { message: string; nonce: Uint8Array; recipient: string }): Promise<{ publicKey: string; signature: string }> {
   if (!current) throw new Error("Connect a NEAR wallet first.");
   const wallet = await (await selector()).wallet<InjectedWallet>(current.walletId);
   if (!wallet.signMessage) throw new Error("This wallet cannot sign messages.");
-  // wallet-selector types the nonce as Buffer; both supported wallets accept any Uint8Array.
-  const signed = await wallet.signMessage({ message: p.message, nonce: p.nonce as never, recipient: p.recipient });
+  const signed = await wallet.signMessage({ message: p.message, nonce: (await nep413Nonce(p.nonce)) as never, recipient: p.recipient });
   if (!signed) throw new Error("The wallet did not return a signature.");
   if (signed.accountId !== current.accountId) throw new Error("The wallet signed with a different account than the one connected.");
   return { publicKey: signed.publicKey, signature: signed.signature };
