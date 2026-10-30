@@ -51,7 +51,7 @@ export function mountInvoices(el: HTMLElement): () => void {
               `<a class="invoice-record" href="#/invoices/${esc(encodeURIComponent(i.id))}"><strong>${esc(i.data.number || "Untitled draft")}</strong><span>${esc(i.data.client || "No client")}</span><span>${esc(totalLabel(i))}</span><small>${statusChip(i)} Due ${esc(i.data.dueDate || "not set")}</small></a>`,
           )
           .join("")
-      : `<p class="empty">${items.length ? "No invoices in this view." : "No invoices yet. Create your first one."}</p>`;
+      : `<p class="empty">${items.length ? "No invoices in this view." : `No invoices yet. <a href="#/invoices/new">Create your first one</a>.`}</p>`;
   }
 
   el.querySelector<HTMLSelectElement>("#invoice-filter")!.onchange = (e) => {

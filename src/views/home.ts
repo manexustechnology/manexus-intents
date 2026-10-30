@@ -91,7 +91,7 @@ export function mountHome(el: HTMLElement): () => void {
                 `<div class="home-card"><strong>${esc(x.formatted)} ${esc(x.symbol)}</strong><small>${esc(x.blockchain)}</small>${x.usd ? `<small>≈ $${esc(x.usd)} reference price</small>` : ""}</div>`,
             )
             .join("")
-        : `<p class="empty">No balance yet. Paid invoices land here.</p>`;
+        : `<p class="empty">No balance yet. Paid invoices land here, whatever chain your customer pays from. <a href="#/invoices/new">Create an invoice</a>.</p>`;
     },
     (e: unknown) => {
       if (!alive) return;
@@ -115,7 +115,7 @@ export function mountHome(el: HTMLElement): () => void {
                 `<a class="invoice-record" href="#/invoices/${esc(encodeURIComponent(i.id))}"><strong>${esc(i.data.number || "Untitled draft")}</strong><span>${esc(i.data.client || "No client")}</span><span>${esc(totalLabel(i))}</span><small>${statusChip(i)} Due ${esc(i.data.dueDate || "not set")}</small></a>`,
             )
             .join("")
-        : `<p class="empty">No invoices yet. Create your first one.</p>`;
+        : `<p class="empty">No invoices yet. <a href="#/invoices/new">Create your first one</a>.</p>`;
     },
     (e: unknown) => {
       if (!alive) return;

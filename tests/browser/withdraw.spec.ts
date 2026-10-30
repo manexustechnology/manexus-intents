@@ -89,6 +89,7 @@ test("EVM withdrawal: review, explicit confirmation, wallet signature, progress,
   expect(quote.body).toEqual({ originAsset: USDC, amount: "1500000", destinationAsset: ARB, recipient: DEST });
 
   await expect(page.locator("#wd-network")).toHaveText("Arbitrum (arb)");
+  await expect(page.getByRole("list", { name: "Route: USDC on NEAR Intents, then USDC on Arbitrum (arb)" })).toBeVisible();
   await expect(page.locator("#wd-address")).toHaveText(DEST);
   await expect(page.locator("#wd-send")).toHaveText("1.5 USDC");
   await expect(page.locator("#wd-receive")).toHaveText("≈ 1.49 USDC");

@@ -14,6 +14,7 @@ import { mountLogin } from "./views/login.ts";
 import { mountSwap } from "./views/swap.ts";
 import { mountWithdraw } from "./views/withdraw.ts";
 import { disconnectWallet, type Session } from "./wallet/index.ts";
+import { ICONS } from "./icons.ts";
 
 export type Mount = (el: HTMLElement, params: Record<string, string>) => () => void;
 
@@ -73,13 +74,13 @@ registerView("pay", mountPay);
 // Desktop sidebar lists every entry. The mobile bottom bar shows the primary ones plus "More",
 // which opens the rest (Payroll, Withdraw, Agent) and Sign out.
 const NAV: [string, string, string, string][] = [
-  ["home", "#/", "◫", "Home"],
-  ["invoices", "#/invoices", "▤", "Invoices"],
-  ["bills", "#/bills", "▥", "Bills"],
-  ["swap", "#/swap", "⇄", "Swap"],
-  ["payroll", "#/payroll", "☰", "Payroll"],
-  ["withdraw", "#/withdraw", "↗", "Withdraw"],
-  ["agent", "#/agent", "✦", "Agent"],
+  ["home", "#/", ICONS.home, "Home"],
+  ["invoices", "#/invoices", ICONS.invoices, "Invoices"],
+  ["bills", "#/bills", ICONS.bills, "Bills"],
+  ["swap", "#/swap", ICONS.swap, "Swap"],
+  ["payroll", "#/payroll", ICONS.payroll, "Payroll"],
+  ["withdraw", "#/withdraw", ICONS.withdraw, "Withdraw"],
+  ["agent", "#/agent", ICONS.agent, "Agent"],
 ];
 const MOBILE_PRIMARY = new Set(["home", "invoices", "bills", "swap"]);
 
@@ -107,8 +108,8 @@ function navHtml(route: Route): string {
   const moreActive = rest.some(([id]) => route.nav === id);
   const menu = `${rest
     .map(([id, href, icon, label]) => `<a href="${href}" class="more-item ${route.nav === id ? "active" : ""}"${current(route, id)}><span aria-hidden="true">${icon}</span>${esc(label)}</a>`)
-    .join("")}<button type="button" class="more-item" id="more-sign-out"><span aria-hidden="true">⏻</span>Sign out</button>`;
-  return `${links}<button type="button" class="nav nav-more ${moreActive ? "active" : ""}" id="nav-more" aria-haspopup="true" aria-expanded="false" aria-controls="more-menu"><span aria-hidden="true">⋯</span>More</button><div class="more-menu" id="more-menu" hidden>${menu}</div>`;
+    .join("")}<button type="button" class="more-item" id="more-sign-out"><span aria-hidden="true">${ICONS.signOut}</span>Sign out</button>`;
+  return `${links}<button type="button" class="nav nav-more ${moreActive ? "active" : ""}" id="nav-more" aria-haspopup="true" aria-expanded="false" aria-controls="more-menu"><span aria-hidden="true">${ICONS.more}</span>More</button><div class="more-menu" id="more-menu" hidden>${menu}</div>`;
 }
 
 function wireMore(): void {

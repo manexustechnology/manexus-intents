@@ -34,3 +34,21 @@ test("the footer follows the content on a long page", async ({ page }) => {
   const footer = (await page.locator(".page > footer").boundingBox())!;
   expect(footer.y).toBeGreaterThanOrEqual(content.y + content.height - 1);
 });
+
+test("an empty balance points to creating an invoice", async ({ page }) => {
+  await setup(page, []);
+  await page.goto("/#/withdraw");
+  await page.getByRole("link", { name: "Create an invoice" }).click();
+  await expect(page).toHaveURL(/#\/invoices\/new$/);
+});
+
+test("nav icons are SVG and hidden from assistive tech", async ({ page }) => {
+  await setup(page, []);
+  await page.goto("/#/withdraw");
+  const icons = page.locator("a.nav > span");
+  await expect(icons).toHaveCount(7);
+  for (const span of await icons.all()) {
+    await expect(span).toHaveAttribute("aria-hidden", "true");
+    await expect(span.locator("svg.icon")).toHaveCount(1);
+  }
+});
