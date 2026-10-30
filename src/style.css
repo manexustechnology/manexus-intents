@@ -173,6 +173,11 @@ i {
 }
 .page {
   margin-left: 238px;
+  /* Footer stays at the bottom of the viewport on short pages. */
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  min-height: 100dvh;
 }
 header {
   height: 83px;
@@ -216,8 +221,9 @@ header {
   font-size: 11px;
 }
 main {
+  width: 100%;
   max-width: 1230px;
-  margin: auto;
+  margin: 0 auto;
   padding: 34px 42px 45px;
 }
 .heading {
@@ -552,6 +558,7 @@ p {
   color: #768c6f;
 }
 footer {
+  margin-top: auto;
   display: flex;
   justify-content: space-between;
   padding: 0 42px 25px;
